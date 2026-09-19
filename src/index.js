@@ -1,1555 +1,830 @@
-/**
- * HLS Reverse Proxy - DEBUG VERSION
- *
- * IMPORTANT:
- * Keep your authentication credential private.
- * Do not commit it to a public GitHub repository.
- */
-
-// ============================================================
-// CONFIGURATION
-// ============================================================
-
 const CONFIG = {
-  baseUrl: 'https://bldcmprod-cdn.toffeelive.com/cdn/live/desh_tv',
+  // ONLY use an HLS stream you own or are authorized to proxy.
+  AUTHORIZED_HLS_URL: "https://bldcmprod-cdn.toffeelive.com/cdn/live/desh_tv/playlists.m3u8",
 
-  // Keep your existing authorized credential here temporarily
-  // OR preferably load it from a Cloudflare Worker Secret.
-  cookie: 'Edge-Cache-Cookie=URLPrefix=aHR0cHM6Ly9ibGRjbXByb2QtY2RuLnRvZmZlZWxpdmUuY29t:Expires=1790010960:KeyName=prod_linear:Signature=VX2pepfUQvVv0i_2f7wSdPISEndX5duKPnyA5rQesQOVDZ8S-P2mXOYk7QFYC4L96cQ2yURkoUFl0ahEkW4aDQ',
-
-  userAgent: 'okhttp/4.11.0',
-
-  logo: 'https://assets-prod.services.toffeelive.com/w_640,q_75,f_webp/PiL635oBEef-9-uV2uCe/posters/36f380e0-6c71-4b27-a73b-2afb3ce7e982.png'
+  USER_AGENT: "Mozilla/5.0 (compatible; HLS-Proxy/1.0)",
 };
-
-
-// ============================================================
-// CORS
-// ============================================================
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
-  'Access-Control-Allow-Headers': '*',
-  'Access-Control-Max-Age': '86400'
-};
-
-
-// ============================================================
-// WORKER
-// ============================================================
 
 export default {
-
   async fetch(request, env, ctx) {
+    const url = new URL(request.url);
 
-    if (request.method === 'OPTIONS') {
+    // CORS
+    if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: corsHeaders
+        headers: corsHeaders(),
       });
     }
 
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    console.log('================================================');
-    console.log('REQUEST');
-    console.log('Method:', request.method);
-    console.log('Path:', path);
-    console.log('URL:', url.href);
-    console.log('Time:', new Date().toISOString());
-    console.log('================================================');
-
     try {
+      if (url.pathname === "/") {
+        return playerPage(request);
+      }
 
-      // ------------------------------------------------------
-      // DEBUG
-      // ------------------------------------------------------
+      if (url.pathname === "/playlist.m3u8") {
+        return fetchPlaylist(request);
+      }
 
-      if (path === '/debug') {
+      if (url.pathname === "/proxy") {
+        return proxyResource(request);
+      }
+
+      if (url.pathname === "/debug") {
         return debugInfo(request);
       }
 
-
-      // ------------------------------------------------------
-      // TEST UPSTREAM
-      // ------------------------------------------------------
-
-      if (path === '/test-upstream') {
-        return await testUpstream();
+      if (url.pathname === "/test-upstream") {
+        return testUpstream();
       }
 
-
-      // ------------------------------------------------------
-      // MAIN PLAYLIST
-      // ------------------------------------------------------
-
-      if (
-        path === '/playlist.m3u8' ||
-        path === '/'
-      ) {
-        return await fetchPlaylist(
-          request,
-          CONFIG.baseUrl.replace(/\/$/, '') + '/playlist.m3u8',
-          url.origin
-        );
-      }
-
-
-      // ------------------------------------------------------
-      // GENERIC PROXY
-      // ------------------------------------------------------
-
-      if (path.startsWith('/proxy/')) {
-
-        const encoded = path.substring('/proxy/'.length);
-
-        let targetUrl;
-
-        try {
-          targetUrl = decodeURIComponent(encoded);
-        } catch (e) {
-
-          console.error(
-            'URL DECODE ERROR:',
-            e.message
-          );
-
-          return textResponse(
-            'Invalid proxy URL encoding',
-            400
-          );
-        }
-
-        console.log('PROXY TARGET:', targetUrl);
-
-        return await proxyContent(
-          request,
-          targetUrl
-        );
-      }
-
-
-      // ------------------------------------------------------
-      // SEGMENTS
-      // ------------------------------------------------------
-
-      if (path.startsWith('/segments/')) {
-
-        const segmentPath =
-          path.substring('/segments/'.length);
-
-        const targetUrl =
-          CONFIG.baseUrl.replace(/\/$/, '') +
-          '/' +
-          segmentPath;
-
-        console.log(
-          'SEGMENT TARGET:',
-          targetUrl
-        );
-
-        return await proxyContent(
-          request,
-          targetUrl
-        );
-      }
-
-
-      // ------------------------------------------------------
-      // PLAYER
-      // ------------------------------------------------------
-
-      return servePlayerPage(url.origin);
-
-    } catch (error) {
-
-      console.error(
-        'WORKER FATAL ERROR:',
-        error
+      return json(
+        {
+          error: "Not found",
+          routes: [
+            "/",
+            "/playlist.m3u8",
+            "/proxy?url=...",
+            "/debug",
+            "/test-upstream",
+          ],
+        },
+        404
       );
-
-      return textResponse(
-        'Worker Error: ' + error.message,
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: error?.message || String(error),
+          stack: error?.stack || null,
+        },
         500
       );
     }
-  }
+  },
 };
 
+/* =========================================================
+   PLAYLIST
+========================================================= */
 
-// ============================================================
-// DEBUG INFO
-// ============================================================
-
-function debugInfo(request) {
-
-  const url = new URL(request.url);
-
-  const info = {
-    status: 'ok',
-
-    worker: {
-      url: url.origin,
-      path: url.pathname,
-      method: request.method,
-      time: new Date().toISOString()
-    },
-
-    configuration: {
-      baseUrl: CONFIG.baseUrl,
-      userAgent: CONFIG.userAgent,
-
-      // Never expose the credential
-      cookieConfigured:
-        !!CONFIG.cookie &&
-        CONFIG.cookie !== 'REPLACE_WITH_YOUR_AUTHORIZED_COOKIE'
-    },
-
-    endpoints: {
-      player: url.origin + '/',
-      playlist: url.origin + '/playlist.m3u8',
-      upstreamTest: url.origin + '/test-upstream',
-      debug: url.origin + '/debug'
-    }
-  };
-
-  return new Response(
-    JSON.stringify(info, null, 2),
-    {
-      status: 200,
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
-}
-
-
-// ============================================================
-// TEST UPSTREAM
-// ============================================================
-
-async function testUpstream() {
-
-  const targetUrl =
-    CONFIG.baseUrl.replace(/\/$/, '') +
-    '/playlist.m3u8';
-
-  console.log('UPSTREAM TEST');
-  console.log('Target:', targetUrl);
-
-  const headers = {
-    'User-Agent': CONFIG.userAgent,
-    'Accept': '*/*'
-  };
-
-  if (CONFIG.cookie) {
-    headers['Cookie'] = CONFIG.cookie;
-  }
-
-  let response;
-
+async function fetchPlaylist(request) {
   const started = Date.now();
 
-  try {
+  const upstreamUrl = CONFIG.AUTHORIZED_HLS_URL;
 
-    response = await fetch(
-      targetUrl,
-      {
-        method: 'GET',
-        headers,
-        redirect: 'follow'
-      }
-    );
+  const response = await fetch(upstreamUrl, {
+    method: "GET",
+    headers: {
+      "User-Agent": CONFIG.USER_AGENT,
+      "Accept": [
+        "application/vnd.apple.mpegurl",
+        "application/x-mpegURL",
+        "audio/mpegurl",
+        "text/plain",
+        "*/*",
+      ].join(", "),
+    },
+    redirect: "follow",
+  });
 
-  } catch (error) {
-
-    console.error(
-      'UPSTREAM FETCH FAILED:',
-      error
-    );
-
-    return new Response(
-      JSON.stringify({
-        ok: false,
-        stage: 'fetch',
-        error: error.message
-      }, null, 2),
-      {
-        status: 502,
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-  }
-
-  const elapsed = Date.now() - started;
-
-  const result = {
-    ok: response.ok,
-
-    status: response.status,
-
-    statusText: response.statusText,
-
-    elapsedMs: elapsed,
-
-    finalUrl: response.url,
-
-    redirected: response.redirected,
-
-    contentType:
-      response.headers.get('content-type'),
-
-    contentLength:
-      response.headers.get('content-length'),
-
-    cacheStatus:
-      response.headers.get('cf-cache-status')
-  };
-
-  console.log(
-    'UPSTREAM RESULT:',
-    JSON.stringify(result)
-  );
-
-  // Read a small amount only for diagnostics
-  let preview = '';
-
-  try {
-
-    const clone = response.clone();
-
-    const text = await clone.text();
-
-    preview = text.substring(0, 500);
-
-  } catch (e) {
-
-    preview =
-      'Unable to read response body: ' +
-      e.message;
-  }
-
-  result.bodyPreview = preview;
-
-  return new Response(
-    JSON.stringify(result, null, 2),
-    {
-      status: response.ok ? 200 : 502,
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
-}
-
-
-// ============================================================
-// FETCH PLAYLIST
-// ============================================================
-
-async function fetchPlaylist(
-  request,
-  targetUrl,
-  origin
-) {
-
-  console.log('PLAYLIST REQUEST');
-  console.log('Target:', targetUrl);
-
-  const headers = {
-    'User-Agent': CONFIG.userAgent,
-    'Cookie': CONFIG.cookie,
-    'Accept': '*/*'
-  };
-
-  let response;
-
-  const started = Date.now();
-
-  try {
-
-    response = await fetch(
-      targetUrl,
-      {
-        method: 'GET',
-        headers,
-        redirect: 'follow'
-      }
-    );
-
-  } catch (error) {
-
-    console.error(
-      'PLAYLIST FETCH ERROR:',
-      error
-    );
-
-    return textResponse(
-      'Playlist fetch failed: ' +
-      error.message,
-      502
-    );
-  }
-
-  const elapsed =
-    Date.now() - started;
-
-  console.log(
-    'PLAYLIST STATUS:',
-    response.status
-  );
-
-  console.log(
-    'PLAYLIST CONTENT-TYPE:',
-    response.headers.get('content-type')
-  );
-
-  console.log(
-    'PLAYLIST FINAL URL:',
-    response.url
-  );
-
-  console.log(
-    'PLAYLIST TIME:',
-    elapsed + 'ms'
-  );
-
+  const text = await response.text();
 
   if (!response.ok) {
-
-    const errorBody =
-      await safeReadText(response);
-
-    console.error(
-      'UPSTREAM PLAYLIST ERROR BODY:',
-      errorBody.substring(0, 1000)
-    );
-
     return new Response(
-      JSON.stringify({
-        error: 'Upstream playlist request failed',
-        status: response.status,
-        statusText: response.statusText,
-        finalUrl: response.url,
-        elapsedMs: elapsed,
-        bodyPreview:
-          errorBody.substring(0, 500)
-      }, null, 2),
-      {
-        status: response.status,
-        headers: {
-          ...corsHeaders,
-          'Content-Type':
-            'application/json'
-        }
-      }
-    );
-  }
-
-
-  let body;
-
-  try {
-
-    body = await response.text();
-
-  } catch (error) {
-
-    console.error(
-      'PLAYLIST READ ERROR:',
-      error
-    );
-
-    return textResponse(
-      'Could not read playlist: ' +
-      error.message,
-      502
-    );
-  }
-
-
-  console.log(
-    'PLAYLIST SIZE:',
-    body.length
-  );
-
-  console.log(
-    'PLAYLIST PREVIEW:',
-    body.substring(0, 1000)
-  );
-
-
-  if (!body.includes('#EXTM3U')) {
-
-    console.error(
-      'WARNING: Response does not contain #EXTM3U'
-    );
-
-    return new Response(
-      JSON.stringify({
-        error:
-          'Upstream returned something other than an HLS playlist',
-
-        status: response.status,
-
-        contentType:
-          response.headers.get('content-type'),
-
-        bodyPreview:
-          body.substring(0, 1000)
-
-      }, null, 2),
+      JSON.stringify(
+        {
+          ok: false,
+          stage: "playlist-fetch",
+          status: response.status,
+          statusText: response.statusText,
+          elapsedMs: Date.now() - started,
+          bodyPreview: text.slice(0, 1000),
+        },
+        null,
+        2
+      ),
       {
         status: 502,
         headers: {
-          ...corsHeaders,
-          'Content-Type':
-            'application/json'
-        }
+          "Content-Type": "application/json; charset=utf-8",
+          ...corsHeaders(),
+        },
       }
     );
   }
 
+  const origin = new URL(request.url).origin;
 
-  // Rewrite playlist
-  const rewritten =
-    rewritePlaylistUrls(
-      body,
-      targetUrl,
-      origin
-    );
-
-
-  console.log(
-    'REWRITTEN PLAYLIST SIZE:',
-    rewritten.length
+  const rewritten = rewritePlaylistUrls(
+    text,
+    response.url || upstreamUrl,
+    origin
   );
 
-
-  return new Response(
-    rewritten,
-    {
-      status: 200,
-      headers: {
-        ...corsHeaders,
-        'Content-Type':
-          'application/vnd.apple.mpegurl',
-        'Cache-Control':
-          'no-store, no-cache, must-revalidate'
-      }
-    }
-  );
+  return new Response(rewritten, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/vnd.apple.mpegurl; charset=utf-8",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Headers": "*",
+      "X-Proxy-Time": String(Date.now() - started),
+    },
+  });
 }
 
+/* =========================================================
+   HLS PLAYLIST REWRITER
+========================================================= */
 
-// ============================================================
-// PLAYLIST REWRITER
-// ============================================================
-
-function rewritePlaylistUrls(
-  playlist,
-  playlistUrl,
-  origin
-) {
-
-  const lines =
-    playlist.split(/\r?\n/);
-
-  let rewrittenCount = 0;
-
-  const output =
-    lines.map(line => {
-
-      const trimmed =
-        line.trim();
+function rewritePlaylistUrls(playlist, playlistUrl, workerOrigin) {
+  return playlist
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
 
       if (!trimmed) {
         return line;
       }
 
-
-      // ------------------------------------------------------
-      // EXT-X-KEY / EXT-X-MAP / OTHER URI="..."
-      // ------------------------------------------------------
-
-      if (
-        trimmed.startsWith('#') &&
-        trimmed.includes('URI="')
-      ) {
-
+      /*
+       * Comments/tags may contain URI="..."
+       *
+       * Example:
+       * #EXT-X-MEDIA:...,URI="audio/index.m3u8"
+       */
+      if (trimmed.startsWith("#")) {
         return line.replace(
-          /URI="([^"]+)"/g,
-          (match, uri) => {
-
+          /URI="([^"]+)"/gi,
+          (_, uri) => {
             try {
+              const absolute = new URL(uri, playlistUrl).href;
 
-              const absolute =
-                new URL(
-                  uri,
-                  playlistUrl
-                ).href;
-
-              rewrittenCount++;
-
-              return (
-                'URI="' +
-                origin +
-                '/proxy/' +
-                encodeURIComponent(absolute) +
-                '"'
-              );
-
-            } catch (e) {
-
-              console.error(
-                'URI REWRITE ERROR:',
-                uri,
-                e.message
-              );
-
-              return match;
+              return `URI="${workerOrigin}/proxy?url=${encodeURIComponent(
+                absolute
+              )}"`;
+            } catch {
+              return `URI="${uri}"`;
             }
           }
         );
       }
 
-
-      // ------------------------------------------------------
-      // Comments
-      // ------------------------------------------------------
-
-      if (trimmed.startsWith('#')) {
-        return line;
-      }
-
-
-      // ------------------------------------------------------
-      // HLS MEDIA / SUB PLAYLIST URI
-      // ------------------------------------------------------
-
+      /*
+       * Normal HLS URI:
+       *
+       * ../slang/channel/index.m3u8
+       * segment001.ts
+       * /live/segment001.ts
+       * https://example.com/file.ts
+       *
+       * new URL() correctly resolves all of them relative
+       * to the CURRENT playlist URL.
+       */
       try {
+        const absolute = new URL(trimmed, playlistUrl).href;
 
-        const absolute =
-          new URL(
-            trimmed,
-            playlistUrl
-          ).href;
-
-        rewrittenCount++;
-
-        return (
-          origin +
-          '/proxy/' +
-          encodeURIComponent(absolute)
-        );
-
-      } catch (e) {
-
-        console.error(
-          'MEDIA URL REWRITE ERROR:',
-          trimmed,
-          e.message
-        );
-
+        return `${workerOrigin}/proxy?url=${encodeURIComponent(
+          absolute
+        )}`;
+      } catch {
         return line;
       }
-
-    });
-
-
-  console.log(
-    'PLAYLIST URLS REWRITTEN:',
-    rewrittenCount
-  );
-
-  return output.join('\n');
+    })
+    .join("\n");
 }
 
+/* =========================================================
+   RESOURCE PROXY
+========================================================= */
 
-// ============================================================
-// PROXY CONTENT
-// ============================================================
+async function proxyResource(request) {
+  const requestUrl = new URL(request.url);
+  const target = requestUrl.searchParams.get("url");
 
-async function proxyContent(
-  request,
-  targetUrl
-) {
-
-  let parsed;
-
-  try {
-
-    parsed = new URL(targetUrl);
-
-  } catch (error) {
-
-    console.error(
-      'INVALID TARGET URL:',
-      targetUrl
-    );
-
-    return textResponse(
-      'Invalid target URL',
+  if (!target) {
+    return json(
+      {
+        ok: false,
+        error: "Missing ?url=",
+      },
       400
     );
   }
 
+  let targetUrl;
 
-  console.log('----------------------------------------');
-  console.log('MEDIA REQUEST');
-  console.log('Target:', targetUrl);
-  console.log('Type:', request.method);
-
-
-  const headers = {
-    'User-Agent': CONFIG.userAgent,
-    'Cookie': CONFIG.cookie,
-    'Accept': '*/*'
-  };
-
-
-  const range =
-    request.headers.get('Range');
-
-  if (range) {
-
-    headers['Range'] = range;
-
-    console.log(
-      'Range:',
-      range
+  try {
+    targetUrl = new URL(target);
+  } catch {
+    return json(
+      {
+        ok: false,
+        error: "Invalid URL",
+      },
+      400
     );
   }
 
+  /*
+   * Security:
+   * Only allow URLs belonging to the configured authorized
+   * HLS origin.
+   */
+  const authorizedOrigin = new URL(
+    CONFIG.AUTHORIZED_HLS_URL
+  ).origin;
 
-  const referer =
-    request.headers.get('Referer');
-
-  if (referer) {
-
-    console.log(
-      'Client Referer:',
-      referer
+  if (targetUrl.origin !== authorizedOrigin) {
+    return json(
+      {
+        ok: false,
+        error: "Target origin is not authorized by this worker.",
+      },
+      403
     );
   }
-
-
-  let response;
 
   const started = Date.now();
 
-  try {
+  const upstream = await fetch(targetUrl.href, {
+    method: "GET",
+    headers: {
+      "User-Agent": CONFIG.USER_AGENT,
+      "Accept": "*/*",
+    },
+    redirect: "follow",
+  });
 
-    response = await fetch(
-      parsed.href,
+  if (!upstream.ok) {
+    const preview = await upstream.text();
+
+    return json(
       {
-        method: request.method,
-        headers,
-        redirect: 'follow'
-      }
-    );
-
-  } catch (error) {
-
-    console.error(
-      'MEDIA FETCH ERROR:',
-      error
-    );
-
-    return new Response(
-      JSON.stringify({
-        error: 'Upstream media fetch failed',
-        message: error.message,
-        target: parsed.href
-      }, null, 2),
-      {
-        status: 502,
-        headers: {
-          ...corsHeaders,
-          'Content-Type':
-            'application/json'
-        }
-      }
+        ok: false,
+        stage: "resource-fetch",
+        status: upstream.status,
+        statusText: upstream.statusText,
+        target: targetUrl.href,
+        elapsedMs: Date.now() - started,
+        bodyPreview: preview.slice(0, 500),
+      },
+      502
     );
   }
 
-
-  const elapsed =
-    Date.now() - started;
-
-
-  console.log(
-    'MEDIA STATUS:',
-    response.status
-  );
-
-  console.log(
-    'MEDIA CONTENT-TYPE:',
-    response.headers.get(
-      'content-type'
-    )
-  );
-
-  console.log(
-    'MEDIA CONTENT-LENGTH:',
-    response.headers.get(
-      'content-length'
-    )
-  );
-
-  console.log(
-    'MEDIA FINAL URL:',
-    response.url
-  );
-
-  console.log(
-    'MEDIA REDIRECTED:',
-    response.redirected
-  );
-
-  console.log(
-    'MEDIA TIME:',
-    elapsed + 'ms'
-  );
-
-
-  const responseHeaders =
-    new Headers(
-      response.headers
-    );
-
-
-  // CORS
-  Object.entries(
-    corsHeaders
-  ).forEach(
-    ([key, value]) => {
-      responseHeaders.set(
-        key,
-        value
-      );
-    }
-  );
-
-
-  // Do not cache live media
-  responseHeaders.set(
-    'Cache-Control',
-    'no-store'
-  );
-
-
-  // Helpful fallback content types
   const contentType =
-    responseHeaders.get(
-      'content-type'
-    ) || '';
+    upstream.headers.get("content-type") ||
+    guessContentType(targetUrl.pathname);
 
+  /*
+   * If a nested playlist is returned through /proxy,
+   * rewrite it too.
+   */
+  if (isPlaylist(contentType, targetUrl.pathname)) {
+    const body = await upstream.text();
 
-  if (
-    !contentType &&
-    (
-      parsed.pathname.endsWith('.ts') ||
-      parsed.pathname.includes('.ts')
-    )
-  ) {
+    const origin = requestUrl.origin;
 
-    responseHeaders.set(
-      'Content-Type',
-      'video/mp2t'
+    const rewritten = rewritePlaylistUrls(
+      body,
+      upstream.url || targetUrl.href,
+      origin
     );
+
+    return new Response(rewritten, {
+      status: 200,
+      headers: {
+        "Content-Type":
+          "application/vnd.apple.mpegurl; charset=utf-8",
+        "Cache-Control": "no-store",
+        ...corsHeaders(),
+      },
+    });
   }
 
+  /*
+   * For TS/AAC/MP4/etc. return the upstream body directly.
+   */
+  const headers = new Headers();
 
-  if (
-    parsed.pathname.endsWith('.m3u8') ||
-    contentType.includes(
-      'mpegurl'
-    )
-  ) {
+  headers.set("Content-Type", contentType);
+  headers.set("Cache-Control", "no-store");
 
-    responseHeaders.set(
-      'Content-Type',
-      'application/vnd.apple.mpegurl'
-    );
+  const contentLength =
+    upstream.headers.get("content-length");
+
+  if (contentLength) {
+    headers.set("Content-Length", contentLength);
   }
 
+  addCors(headers);
 
-  if (!response.ok) {
-
-    console.error(
-      'MEDIA REQUEST FAILED:',
-      response.status,
-      parsed.href
-    );
-
-    return new Response(
-      JSON.stringify({
-        error: 'Upstream media request failed',
-
-        status: response.status,
-
-        statusText:
-          response.statusText,
-
-        target: parsed.href,
-
-        finalUrl:
-          response.url,
-
-        redirected:
-          response.redirected,
-
-        contentType:
-          response.headers.get(
-            'content-type'
-          ),
-
-        elapsedMs: elapsed
-
-      }, null, 2),
-      {
-        status: response.status,
-        headers: {
-          ...corsHeaders,
-          'Content-Type':
-            'application/json'
-        }
-      }
-    );
-  }
-
-
-  console.log(
-    'MEDIA OK:',
-    parsed.pathname
-  );
-
-  console.log('----------------------------------------');
-
-
-  return new Response(
-    response.body,
-    {
-      status: response.status,
-      statusText:
-        response.statusText,
-      headers:
-        responseHeaders
-    }
-  );
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers,
+  });
 }
 
+/* =========================================================
+   DEBUG
+========================================================= */
 
-// ============================================================
-// PLAYER PAGE
-// ============================================================
+async function debugInfo(request) {
+  const url = new URL(request.url);
 
-function servePlayerPage(origin) {
+  let upstream;
+
+  try {
+    upstream = new URL(CONFIG.AUTHORIZED_HLS_URL);
+  } catch {
+    return json(
+      {
+        ok: false,
+        error: "AUTHORIZED_HLS_URL is invalid",
+      },
+      500
+    );
+  }
+
+  return json({
+    ok: true,
+
+    worker: {
+      url: url.origin,
+      path: url.pathname,
+      method: request.method,
+      time: new Date().toISOString(),
+    },
+
+    configuration: {
+      upstreamOrigin: upstream.origin,
+      upstreamPath: upstream.pathname,
+      userAgent: CONFIG.USER_AGENT,
+    },
+
+    endpoints: {
+      player: `${url.origin}/`,
+      playlist: `${url.origin}/playlist.m3u8`,
+      upstreamTest: `${url.origin}/test-upstream`,
+      debug: `${url.origin}/debug`,
+    },
+  });
+}
+
+/* =========================================================
+   UPSTREAM TEST
+========================================================= */
+
+async function testUpstream() {
+  const started = Date.now();
+
+  let response;
+
+  try {
+    response = await fetch(CONFIG.AUTHORIZED_HLS_URL, {
+      method: "GET",
+      headers: {
+        "User-Agent": CONFIG.USER_AGENT,
+        "Accept": "application/vnd.apple.mpegurl,*/*",
+      },
+      redirect: "follow",
+    });
+  } catch (error) {
+    return json(
+      {
+        ok: false,
+        stage: "fetch",
+        error: error?.message || String(error),
+        elapsedMs: Date.now() - started,
+      },
+      502
+    );
+  }
+
+  const body = await response.text();
+
+  return json({
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    elapsedMs: Date.now() - started,
+
+    finalUrl: response.url,
+
+    redirected: response.redirected,
+
+    contentType: response.headers.get("content-type"),
+
+    contentLength: response.headers.get("content-length"),
+
+    bodyPreview: body.slice(0, 2000),
+  });
+}
+
+/* =========================================================
+   PLAYER
+========================================================= */
+
+function playerPage(request) {
+  const origin = new URL(request.url).origin;
+
+  const playlist = `${origin}/playlist.m3u8`;
 
   const html = `<!DOCTYPE html>
-
 <html lang="en">
-
 <head>
-
 <meta charset="UTF-8">
-
 <meta
   name="viewport"
-  content="width=device-width,initial-scale=1.0"
->
+  content="width=device-width,initial-scale=1,maximum-scale=1"
+/>
 
-<title>HLS Debug Player</title>
+<title>Authorized HLS Player</title>
 
-<script
-  src="https://cdn.jsdelivr.net/npm/hls.js@latest">
-</script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 
 <style>
-
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  background: #0f0f0f;
-  color: white;
+  min-height: 100vh;
+  background:
+    radial-gradient(
+      circle at top,
+      #24324a 0,
+      #101522 45%,
+      #070a10 100%
+    );
+  color: #fff;
   font-family: Arial, sans-serif;
-}
 
-.container {
-  width: 100%;
-  max-width: 1100px;
-  margin: auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
   padding: 20px;
 }
 
-h1 {
-  text-align: center;
-  font-size: 22px;
+.player {
+  width: 100%;
+  max-width: 900px;
+
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.15);
+
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+
+  border-radius: 24px;
+  padding: 16px;
+
+  box-shadow:
+    0 20px 60px rgba(0,0,0,.45);
 }
 
-.player {
-  position: relative;
-  width: 100%;
-  padding-top: 56.25%;
-  background: black;
-  border-radius: 12px;
-  overflow: hidden;
+h1 {
+  font-size: 20px;
+  margin: 4px 4px 14px;
 }
 
 video {
-  position: absolute;
-  inset: 0;
   width: 100%;
-  height: 100%;
-}
+  display: block;
 
-.controls {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 15px;
-}
+  background: #000;
 
-button,
-a {
-  border: 0;
-  border-radius: 8px;
-  padding: 11px 16px;
-  background: #2c3e50;
-  color: white;
-  text-decoration: none;
-  cursor: pointer;
+  border-radius: 16px;
+
+  aspect-ratio: 16 / 9;
 }
 
 .status {
-  margin-top: 15px;
+  margin-top: 12px;
+
   padding: 12px;
-  border-radius: 8px;
-  background: #222;
+
+  border-radius: 14px;
+
+  background: rgba(0,0,0,.25);
+
+  font-size: 14px;
+
   word-break: break-word;
 }
 
-.log {
-  margin-top: 15px;
-  background: #080808;
-  border-radius: 8px;
-  padding: 15px;
-  white-space: pre-wrap;
-  font-family: monospace;
-  font-size: 12px;
-  max-height: 350px;
-  overflow: auto;
+button {
+  margin-top: 12px;
+
+  padding: 11px 16px;
+
+  border-radius: 12px;
+
+  border: 1px solid rgba(255,255,255,.2);
+
+  background: rgba(255,255,255,.1);
+
+  color: white;
+
+  cursor: pointer;
 }
-
 </style>
-
 </head>
 
 <body>
 
-<div class="container">
-
-<h1>HLS Debug Player</h1>
-
 <div class="player">
+
+<h1>Authorized HLS Live Stream</h1>
 
 <video
   id="video"
   controls
-  autoplay
-  muted
-  playsinline>
-</video>
+  playsinline
+  preload="auto"
+></video>
 
-</div>
-
-<div class="controls">
-
-<button onclick="toggleMute()">
-🔇 Mute / Unmute
-</button>
-
-<button onclick="fullscreen()">
-⛶ Fullscreen
-</button>
-
-<a href="${origin}/playlist.m3u8">
-📥 Playlist
-</a>
-
-<a href="${origin}/debug">
-🔍 Debug
-</a>
-
-<a href="${origin}/test-upstream">
-🧪 Upstream Test
-</a>
-
-</div>
-
-<div
-  id="status"
-  class="status">
+<div id="status" class="status">
 Connecting...
 </div>
 
-<div
-  id="log"
-  class="log">
-Waiting for HLS events...
-</div>
+<button onclick="location.href='/debug'">
+Worker Debug
+</button>
+
+<button onclick="location.href='/test-upstream'">
+Upstream Test
+</button>
 
 </div>
-
 
 <script>
+const video = document.getElementById("video");
+const status = document.getElementById("status");
 
-const video =
-  document.getElementById('video');
+const playlist = ${JSON.stringify(playlist)};
 
-const statusEl =
-  document.getElementById('status');
-
-const logEl =
-  document.getElementById('log');
-
-const videoSrc =
-  '${origin}/playlist.m3u8';
-
-
-function log(message) {
-
+function setStatus(message) {
+  status.textContent = message;
   console.log(message);
-
-  logEl.textContent +=
-    '\\n' + message;
-
-  logEl.scrollTop =
-    logEl.scrollHeight;
 }
 
+function startPlayer() {
 
-function status(message) {
+  setStatus("Loading HLS playlist...");
 
-  statusEl.textContent =
-    message;
-}
+  if (window.Hls && Hls.isSupported()) {
 
-
-function toggleMute() {
-
-  video.muted =
-    !video.muted;
-}
-
-
-function fullscreen() {
-
-  if (
-    video.requestFullscreen
-  ) {
-    video.requestFullscreen();
-  }
-}
-
-
-if (Hls.isSupported()) {
-
-  log(
-    'HLS.js supported'
-  );
-
-  const hls =
-    new Hls({
-
-      debug: true,
-
+    const hls = new Hls({
       enableWorker: true,
 
       lowLatencyMode: true,
 
       backBufferLength: 30,
 
-      xhrSetup: function(
-        xhr,
-        url
-      ) {
+      manifestLoadingMaxRetry: 3,
+      levelLoadingMaxRetry: 3,
+      fragLoadingMaxRetry: 3,
 
-        log(
-          'XHR → ' + url
-        );
+      xhrSetup: function(xhr) {
+        xhr.withCredentials = false;
       }
-
     });
 
+    hls.on(Hls.Events.MANIFEST_LOADING, function(event, data) {
+      console.log("MANIFEST_LOADING", data);
+    });
 
-  hls.on(
-    Hls.Events.MANIFEST_LOADING,
-    function(event, data) {
+    hls.on(Hls.Events.MANIFEST_LOADED, function(event, data) {
+      console.log("MANIFEST_LOADED", data);
+    });
 
-      log(
-        'MANIFEST_LOADING → ' +
-        data.url
+    hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
+      console.log("MANIFEST_PARSED", data);
+
+      setStatus(
+        "Playlist loaded. Waiting for video data..."
       );
 
-      status(
-        'Loading playlist...'
-      );
-    }
-  );
+      video.play().catch(function() {
+        setStatus(
+          "Playlist loaded. Press Play."
+        );
+      });
+    });
 
+    hls.on(Hls.Events.LEVEL_LOADED, function(event, data) {
+      console.log("LEVEL_LOADED", data);
+    });
 
-  hls.on(
-    Hls.Events.MANIFEST_LOADED,
-    function(event, data) {
+    hls.on(Hls.Events.FRAG_LOADING, function(event, data) {
+      console.log("FRAG_LOADING", data.frag?.url);
+    });
 
-      log(
-        'MANIFEST_LOADED'
-      );
+    hls.on(Hls.Events.FRAG_LOADED, function(event, data) {
+      console.log("FRAG_LOADED", data.frag?.url);
 
-      log(
-        'Manifest URL: ' +
-        data.url
-      );
+      setStatus("Video data received.");
+    });
 
-      log(
-        'Manifest size: ' +
-        (
-          data.networkDetails &&
-          data.networkDetails.response
-            ? data.networkDetails.response.length
-            : 'unknown'
-        )
-      );
-    }
-  );
+    hls.on(Hls.Events.ERROR, function(event, data) {
 
+      console.error("HLS ERROR", data);
 
-  hls.on(
-    Hls.Events.MANIFEST_PARSED,
-    function(event, data) {
-
-      log(
-        'MANIFEST_PARSED'
-      );
-
-      log(
-        'Levels: ' +
-        hls.levels.length
-      );
-
-      status(
-        'Playlist loaded. Waiting for media...'
-      );
-
-      video.play()
-        .then(function() {
-
-          log(
-            'video.play() succeeded'
-          );
-
-        })
-        .catch(function(error) {
-
-          log(
-            'video.play() failed: ' +
-            error.message
-          );
-
-        });
-    }
-  );
-
-
-  hls.on(
-    Hls.Events.FRAG_LOADING,
-    function(event, data) {
-
-      log(
-        'FRAG_LOADING → ' +
-        (
-          data.frag &&
-          data.frag.url
-            ? data.frag.url
-            : 'unknown'
-        )
-      );
-
-    }
-  );
-
-
-  hls.on(
-    Hls.Events.FRAG_LOADED,
-    function(event, data) {
-
-      log(
-        'FRAG_LOADED'
-      );
-
-      status(
-        'Media segment loaded ✓'
-      );
-
-    }
-  );
-
-
-  hls.on(
-    Hls.Events.FRAG_BUFFERED,
-    function() {
-
-      log(
-        'FRAG_BUFFERED'
-      );
-
-      status(
-        'Stream playing ✓'
-      );
-
-    }
-  );
-
-
-  hls.on(
-    Hls.Events.ERROR,
-    function(event, data) {
-
-      console.error(
-        'FULL HLS ERROR:',
-        data
-      );
-
-
-      log(
-        '=============================='
-      );
-
-      log(
-        'HLS ERROR'
-      );
-
-      log(
-        'Type: ' +
-        data.type
-      );
-
-      log(
-        'Details: ' +
-        data.details
-      );
-
-      log(
-        'Fatal: ' +
+      setStatus(
+        "HLS Error: " +
+        data.type +
+        " / " +
+        data.details +
+        " / fatal=" +
         data.fatal
       );
 
+      if (data.fatal) {
 
-      if (data.url) {
+        if (
+          data.type === Hls.ErrorTypes.NETWORK_ERROR
+        ) {
 
-        log(
-          'URL: ' +
-          data.url
-        );
+          setStatus(
+            "Network error. Retrying..."
+          );
 
+          hls.startLoad();
+
+        } else if (
+          data.type === Hls.ErrorTypes.MEDIA_ERROR
+        ) {
+
+          setStatus(
+            "Media error. Recovering..."
+          );
+
+          hls.recoverMediaError();
+
+        } else {
+
+          setStatus(
+            "Fatal HLS error: " +
+            data.details
+          );
+        }
       }
+    });
 
+    hls.loadSource(playlist);
+    hls.attachMedia(video);
 
-      if (
-        data.response
-      ) {
+    window.hls = hls;
 
-        log(
-          'HTTP Status: ' +
-          (
-            data.response.code ||
-            'unknown'
-          )
+    return;
+  }
+
+  /*
+   * Safari / native HLS support.
+   */
+  if (
+    video.canPlayType(
+      "application/vnd.apple.mpegurl"
+    )
+  ) {
+
+    video.src = playlist;
+
+    video.addEventListener(
+      "loadedmetadata",
+      function() {
+
+        setStatus(
+          "Playlist loaded. Press Play."
         );
 
-        log(
-          'Response URL: ' +
-          (
-            data.response.url ||
-            'unknown'
-          )
-        );
-
+        video.play().catch(function() {});
       }
+    );
 
+    return;
+  }
 
-      status(
-        '✗ ' +
-        data.type +
-        ' / ' +
-        data.details
-      );
-
-
-      log(
-        '=============================='
-      );
-
-
-      if (
-        data.fatal &&
-        data.type ===
-        Hls.ErrorTypes.NETWORK_ERROR
-      ) {
-
-        log(
-          'Fatal network error detected.'
-        );
-
-      }
-
-
-      if (
-        data.fatal &&
-        data.type ===
-        Hls.ErrorTypes.MEDIA_ERROR
-      ) {
-
-        log(
-          'Attempting media recovery...'
-        );
-
-        hls.recoverMediaError();
-
-      }
-
-    }
+  setStatus(
+    "This browser does not support HLS."
   );
-
-
-  hls.attachMedia(video);
-
-  hls.loadSource(videoSrc);
-
-
-} else if (
-  video.canPlayType(
-    'application/vnd.apple.mpegurl'
-  )
-) {
-
-  log(
-    'Native HLS supported'
-  );
-
-  video.src =
-    videoSrc;
-
-  video.addEventListener(
-    'loadedmetadata',
-    function() {
-
-      status(
-        'Metadata loaded ✓'
-      );
-
-      video.play();
-
-    }
-  );
-
-
-  video.addEventListener(
-    'error',
-    function() {
-
-      log(
-        'Native video error'
-      );
-
-      status(
-        '✗ Native HLS error'
-      );
-
-    }
-  );
-
-
-} else {
-
-  status(
-    '✗ HLS not supported'
-  );
-
-  log(
-    'Browser does not support HLS'
-  );
-
 }
 
+video.addEventListener("error", function() {
+
+  console.error(
+    "VIDEO ERROR",
+    video.error
+  );
+
+  if (video.error) {
+    setStatus(
+      "Video error code: " +
+      video.error.code
+    );
+  }
+});
+
+startPlayer();
 </script>
 
 </body>
-
 </html>`;
 
+  return new Response(html, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+}
 
-  return new Response(
-    html,
-    {
-      status: 200,
-      headers: {
-        ...corsHeaders,
-        'Content-Type':
-          'text/html; charset=UTF-8'
-      }
-    }
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function isPlaylist(contentType, pathname) {
+  const type = (contentType || "").toLowerCase();
+
+  return (
+    type.includes("mpegurl") ||
+    type.includes("m3u8") ||
+    pathname.toLowerCase().endsWith(".m3u8")
   );
 }
 
+function guessContentType(pathname) {
+  const path = pathname.toLowerCase();
 
-// ============================================================
-// HELPERS
-// ============================================================
-
-async function safeReadText(response) {
-
-  try {
-
-    return await response.text();
-
-  } catch (error) {
-
-    return (
-      'Unable to read response: ' +
-      error.message
-    );
+  if (path.endsWith(".m3u8")) {
+    return "application/vnd.apple.mpegurl";
   }
+
+  if (path.endsWith(".ts")) {
+    return "video/mp2t";
+  }
+
+  if (path.endsWith(".aac")) {
+    return "audio/aac";
+  }
+
+  if (path.endsWith(".mp4")) {
+    return "video/mp4";
+  }
+
+  if (path.endsWith(".m4s")) {
+    return "video/iso.segment";
+  }
+
+  return "application/octet-stream";
 }
 
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "*",
+  };
+}
 
-function textResponse(
-  message,
-  status = 200
-) {
+function addCors(headers) {
+  headers.set(
+    "Access-Control-Allow-Origin",
+    "*"
+  );
 
+  headers.set(
+    "Access-Control-Allow-Methods",
+    "GET, OPTIONS"
+  );
+
+  headers.set(
+    "Access-Control-Allow-Headers",
+    "*"
+  );
+}
+
+function json(data, status = 200) {
   return new Response(
-    message,
+    JSON.stringify(data, null, 2),
     {
       status,
+
       headers: {
-        ...corsHeaders,
-        'Content-Type':
-          'text/plain; charset=UTF-8'
-      }
+        "Content-Type":
+          "application/json; charset=utf-8",
+
+        "Cache-Control": "no-store",
+
+        ...corsHeaders(),
+      },
     }
   );
-}
+      }
