@@ -1,5 +1,8 @@
-name = "hls-player-proxy"
+name = "jamuna-tv-proxy"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
 
-main = "worker.js"
-
-compatibility_date = "2026-09-19"
+# Optional: Add custom domain
+# routes = [
+#   { pattern = "your-domain.com/*", custom_domain = true }
+# ]
