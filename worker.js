@@ -25,7 +25,7 @@ const CHANNEL = {
    * এখানে নিজের আসল value বসাবে।
    */
   cookie:
-    "PASTE_YOUR_EDGE_CACHE_COOKIE_HERE",
+    "Edge-Cache-Cookie=URLPrefix=aHR0cHM6Ly9ibGRjbXByb2QtY2RuLnRvZmZlZWxpdmUuY29t:Expires=1790009400:KeyName=prod_linear:Signature=xMljSvmCVtgmO_vZGPxckgUbFKrfJwU6G6xLvINarudszkYcVYS1VzrOpnICdQCARYlpOML5YN95R1_BRJiQDg",
 
   user_agent:
     "okhttp/4.11.0"
