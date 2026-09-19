@@ -1,7 +1,6 @@
 const CONFIG = {
-  // Your authorized HLS source
-  HLS_URL:
-    "https://bldcmprod-cdn.toffeelive.com/cdn/live/desh_tv/playlists.m3u8",
+  PLAYLIST_URL:
+    "https://toffee-stream-keeper.lovable.app/toffee.m3u",
 
   USER_AGENT: "okhttp/4.11.0",
 };
@@ -11,7 +10,6 @@ export default {
     const url = new URL(request.url);
 
     try {
-      // CORS preflight
       if (request.method === "OPTIONS") {
         return new Response(null, {
           status: 204,
@@ -19,29 +17,20 @@ export default {
         });
       }
 
-      // Public player
       if (url.pathname === "/") {
         return playerPage(request);
       }
 
-      // Public HLS playlist
-      if (url.pathname === "/playlist.m3u8") {
-        return fetchPlaylist(request, env);
+      if (url.pathname === "/channels") {
+        return getChannels();
       }
 
-      // HLS child playlists / segments
-      if (url.pathname === "/proxy") {
-        return proxyResource(request, env);
+      if (url.pathname === "/stream") {
+        return stream(request, env);
       }
 
-      // Debug
       if (url.pathname === "/debug") {
-        return debug(request, env);
-      }
-
-      // Upstream test
-      if (url.pathname === "/test-upstream") {
-        return testUpstream(env);
+        return debug(env);
       }
 
       return json(
@@ -65,182 +54,165 @@ export default {
 
 
 /* =========================================================
-   UPSTREAM HEADERS
+   GET PUBLIC CHANNEL LIST
 ========================================================= */
 
-function upstreamHeaders(env, accept = "*/*") {
-  const headers = new Headers();
-
-  headers.set("User-Agent", CONFIG.USER_AGENT);
-  headers.set("Accept", accept);
-
-  /*
-   * The credential is stored only as a Cloudflare Worker
-   * secret and is never sent to the browser.
-   */
-  if (env.EDGE_CACHE_COOKIE) {
-    headers.set(
-      "Cookie",
-      `Edge-Cache-Cookie=${env.EDGE_CACHE_COOKIE}`
-    );
-  }
-
-  return headers;
-}
-
-
-/* =========================================================
-   FETCH MASTER PLAYLIST
-========================================================= */
-
-async function fetchPlaylist(request, env) {
-  const started = Date.now();
-
-  const response = await fetch(CONFIG.HLS_URL, {
-    method: "GET",
-
-    headers: upstreamHeaders(
-      env,
-      "application/vnd.apple.mpegurl,application/x-mpegURL,*/*"
-    ),
-
-    redirect: "follow",
-  });
-
-  const body = await response.text();
+async function getChannels() {
+  const response = await fetch(
+    CONFIG.PLAYLIST_URL,
+    {
+      headers: {
+        "User-Agent": CONFIG.USER_AGENT,
+        "Accept": "*/*",
+      },
+    }
+  );
 
   if (!response.ok) {
     return json(
       {
         ok: false,
-        stage: "playlist",
+        error: "Unable to load playlist",
         status: response.status,
-        statusText: response.statusText,
-        elapsedMs: Date.now() - started,
-
-        upstreamUrl: CONFIG.HLS_URL,
-
-        bodyPreview: body.slice(0, 1000),
       },
       502
     );
   }
 
-  const workerOrigin = new URL(request.url).origin;
+  const text = await response.text();
 
-  const rewritten = rewritePlaylistUrls(
-    body,
-    response.url || CONFIG.HLS_URL,
-    workerOrigin
+  const channels = parsePlaylist(text);
+
+  /*
+   * Never return cookies to browser.
+   */
+  const safeChannels = channels.map(
+    (channel, index) => ({
+      id: index,
+
+      category:
+        channel.category || "Other",
+
+      name:
+        channel.name || `Channel ${index + 1}`,
+
+      link:
+        channel.link || "",
+
+      logo:
+        channel.logo || "",
+    })
   );
 
-  return new Response(rewritten, {
-    status: 200,
-
-    headers: {
-      "Content-Type":
-        "application/vnd.apple.mpegurl; charset=utf-8",
-
-      "Cache-Control":
-        "no-store, no-cache, must-revalidate",
-
-      ...corsHeaders(),
-
-      "X-Proxy-Time":
-        String(Date.now() - started),
-    },
+  return json({
+    ok: true,
+    total: safeChannels.length,
+    channels: safeChannels,
   });
 }
 
 
 /* =========================================================
-   PLAYLIST URL REWRITER
+   PLAYLIST PARSER
 ========================================================= */
 
-function rewritePlaylistUrls(
-  playlist,
-  playlistUrl,
-  workerOrigin
-) {
-  return playlist
-    .split(/\r?\n/)
-    .map((line) => {
-      const trimmed = line.trim();
+function parsePlaylist(text) {
+  let data;
 
-      if (!trimmed) {
-        return line;
-      }
+  try {
+    data = JSON.parse(text);
 
-      /*
-       * HLS tags containing URI="..."
-       */
-      if (trimmed.startsWith("#")) {
-        return line.replace(
-          /URI="([^"]+)"/gi,
-          (_, uri) => {
-            try {
-              const absolute = new URL(
-                uri,
-                playlistUrl
-              ).href;
+    if (Array.isArray(data)) {
+      return data;
+    }
 
-              return (
-                `URI="${workerOrigin}/proxy?url=` +
-                encodeURIComponent(absolute) +
-                `"`
-              );
-            } catch {
-              return `URI="${uri}"`;
-            }
-          }
-        );
-      }
+    if (Array.isArray(data.channels)) {
+      return data.channels;
+    }
+  } catch {}
 
-      /*
-       * Normal playlist URL.
-       *
-       * Important:
-       * This correctly handles:
-       *
-       * ../slang/...
-       * ./segment...
-       * segment.ts
-       * /path/file.ts
-       * https://...
-       */
-      try {
-        const absolute = new URL(
-          trimmed,
-          playlistUrl
-        ).href;
+  /*
+   * Basic M3U parser fallback
+   */
+  const lines =
+    text.split(/\r?\n/);
 
-        return (
-          workerOrigin +
-          "/proxy?url=" +
-          encodeURIComponent(absolute)
-        );
-      } catch {
-        return line;
-      }
-    })
-    .join("\n");
+  const result = [];
+
+  let current = {};
+
+  for (const line of lines) {
+    const value = line.trim();
+
+    if (!value) {
+      continue;
+    }
+
+    if (
+      value.startsWith("#EXTINF")
+    ) {
+      const logo =
+        value.match(
+          /tvg-logo="([^"]*)"/i
+        )?.[1] || "";
+
+      const group =
+        value.match(
+          /group-title="([^"]*)"/i
+        )?.[1] || "";
+
+      const comma =
+        value.lastIndexOf(",");
+
+      const name =
+        comma >= 0
+          ? value
+              .slice(comma + 1)
+              .trim()
+          : "Unknown";
+
+      current = {
+        name,
+        category: group,
+        logo,
+      };
+
+      continue;
+    }
+
+    if (
+      !value.startsWith("#") &&
+      /^https?:\/\//i.test(value)
+    ) {
+      current.link = value;
+
+      result.push(current);
+
+      current = {};
+    }
+  }
+
+  return result;
 }
 
 
 /* =========================================================
-   PROXY CHILD PLAYLIST / SEGMENT
+   STREAM
 ========================================================= */
 
-async function proxyResource(request, env) {
-  const requestUrl = new URL(request.url);
+async function stream(request, env) {
+  const url =
+    new URL(request.url);
 
-  const target = requestUrl.searchParams.get("url");
+  const target =
+    url.searchParams.get("url");
 
   if (!target) {
     return json(
       {
         ok: false,
-        error: "Missing url parameter",
+        error:
+          "Missing ?url= parameter",
       },
       400
     );
@@ -254,74 +226,94 @@ async function proxyResource(request, env) {
     return json(
       {
         ok: false,
-        error: "Invalid target URL",
+        error: "Invalid URL",
       },
       400
     );
   }
 
   /*
-   * SSRF protection:
-   * Only proxy resources belonging to the same
-   * authorized upstream origin.
+   * Only permit your configured
+   * authorized origin.
    */
-  let authorizedOrigin;
-
-  try {
-    authorizedOrigin = new URL(
-      CONFIG.HLS_URL
+  const allowedOrigin =
+    new URL(
+      env.AUTHORIZED_HLS_ORIGIN ||
+      "https://YOUR-AUTHORIZED-DOMAIN.example"
     ).origin;
-  } catch {
-    return json(
-      {
-        ok: false,
-        error: "Invalid HLS_URL configuration",
-      },
-      500
-    );
-  }
 
-  if (targetUrl.origin !== authorizedOrigin) {
+  if (
+    targetUrl.origin !==
+    allowedOrigin
+  ) {
     return json(
       {
         ok: false,
         error:
-          "Target URL is outside the authorized upstream origin.",
+          "Unauthorized upstream origin",
       },
       403
     );
   }
 
-  const response = await fetch(targetUrl.href, {
-    method: "GET",
+  const headers =
+    new Headers();
 
-    headers: upstreamHeaders(env),
+  headers.set(
+    "User-Agent",
+    CONFIG.USER_AGENT
+  );
 
-    redirect: "follow",
-  });
+  headers.set(
+    "Accept",
+    "*/*"
+  );
+
+  /*
+   * Secret stays server-side.
+   */
+  if (
+    env.EDGE_CACHE_COOKIE
+  ) {
+    headers.set(
+      "Cookie",
+      `Edge-Cache-Cookie=${env.EDGE_CACHE_COOKIE}`
+    );
+  }
+
+  const response =
+    await fetch(
+      targetUrl.href,
+      {
+        method: "GET",
+        headers,
+        redirect: "follow",
+      }
+    );
 
   if (!response.ok) {
-    const errorBody = await response.text();
-
     return json(
       {
         ok: false,
-        stage: "proxy",
-        status: response.status,
-        statusText: response.statusText,
-        target: targetUrl.href,
-        bodyPreview: errorBody.slice(0, 500),
+        status:
+          response.status,
+        statusText:
+          response.statusText,
       },
       502
     );
   }
 
   const contentType =
-    response.headers.get("content-type") ||
-    guessContentType(targetUrl.pathname);
+    response.headers.get(
+      "content-type"
+    ) ||
+    guessContentType(
+      targetUrl.pathname
+    );
 
   /*
-   * Child .m3u8 playlist
+   * Nested HLS playlist
    */
   if (
     isPlaylist(
@@ -329,68 +321,158 @@ async function proxyResource(request, env) {
       targetUrl.pathname
     )
   ) {
-    const playlist = await response.text();
+    const playlist =
+      await response.text();
 
-    const workerOrigin =
-      requestUrl.origin;
+    const origin =
+      new URL(request.url)
+        .origin;
 
     const rewritten =
-      rewritePlaylistUrls(
+      rewritePlaylist(
         playlist,
-        response.url || targetUrl.href,
-        workerOrigin
+        response.url ||
+          targetUrl.href,
+        origin,
+        env.AUTHORIZED_HLS_ORIGIN
       );
 
-    return new Response(rewritten, {
-      status: 200,
+    return new Response(
+      rewritten,
+      {
+        status: 200,
 
-      headers: {
-        "Content-Type":
-          "application/vnd.apple.mpegurl; charset=utf-8",
+        headers: {
+          "Content-Type":
+            "application/vnd.apple.mpegurl",
 
-        "Cache-Control": "no-store",
+          "Cache-Control":
+            "no-store",
 
-        ...corsHeaders(),
-      },
-    });
+          ...corsHeaders(),
+        },
+      }
+    );
   }
 
-  /*
-   * TS / AAC / M4S / MP4 / etc.
-   */
-  const headers = new Headers();
+  const outputHeaders =
+    new Headers();
 
-  headers.set(
+  outputHeaders.set(
     "Content-Type",
     contentType
   );
 
-  headers.set(
+  outputHeaders.set(
     "Cache-Control",
     "no-store"
   );
 
-  const length =
-    response.headers.get(
-      "content-length"
-    );
-
-  if (length) {
-    headers.set(
-      "Content-Length",
-      length
-    );
-  }
-
-  addCors(headers);
+  addCors(
+    outputHeaders
+  );
 
   return new Response(
     response.body,
     {
       status: response.status,
-      headers,
+      headers: outputHeaders,
     }
   );
+}
+
+
+/* =========================================================
+   HLS URL REWRITE
+========================================================= */
+
+function rewritePlaylist(
+  playlist,
+  playlistUrl,
+  workerOrigin,
+  allowedOrigin
+) {
+  return playlist
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed =
+        line.trim();
+
+      if (!trimmed) {
+        return line;
+      }
+
+      /*
+       * Rewrite URI="..."
+       */
+      if (
+        trimmed.startsWith("#")
+      ) {
+        return line.replace(
+          /URI="([^"]+)"/gi,
+          (_, uri) => {
+            try {
+              const absolute =
+                new URL(
+                  uri,
+                  playlistUrl
+                );
+
+              if (
+                absolute.origin !==
+                allowedOrigin
+              ) {
+                return `URI="${uri}"`;
+              }
+
+              return (
+                `URI="${workerOrigin}` +
+                `/stream?url=` +
+                encodeURIComponent(
+                  absolute.href
+                ) +
+                `"`
+              );
+            } catch {
+              return `URI="${uri}"`;
+            }
+          }
+        );
+      }
+
+      /*
+       * Relative URL:
+       *
+       * ../slang/...
+       * segment.ts
+       * ./segment.ts
+       */
+      try {
+        const absolute =
+          new URL(
+            trimmed,
+            playlistUrl
+          );
+
+        if (
+          absolute.origin !==
+          allowedOrigin
+        ) {
+          return line;
+        }
+
+        return (
+          workerOrigin +
+          "/stream?url=" +
+          encodeURIComponent(
+            absolute.href
+          )
+        );
+      } catch {
+        return line;
+      }
+    })
+    .join("\n");
 }
 
 
@@ -398,133 +480,28 @@ async function proxyResource(request, env) {
    DEBUG
 ========================================================= */
 
-async function debug(request, env) {
-  const workerUrl =
-    new URL(request.url);
-
-  const upstream =
-    new URL(CONFIG.HLS_URL);
-
+async function debug(env) {
   return json({
     ok: true,
 
-    worker: {
-      url: workerUrl.origin,
-      path: workerUrl.pathname,
-      method: request.method,
-      time: new Date().toISOString(),
-    },
+    playlist:
+      CONFIG.PLAYLIST_URL,
 
-    configuration: {
-      upstreamOrigin: upstream.origin,
-      upstreamPath: upstream.pathname,
-
-      userAgent:
-        CONFIG.USER_AGENT,
-
-      cookieConfigured:
-        Boolean(
-          env.EDGE_CACHE_COOKIE
-        ),
-    },
-
-    endpoints: {
-      player:
-        `${workerUrl.origin}/`,
-
-      playlist:
-        `${workerUrl.origin}/playlist.m3u8`,
-
-      upstreamTest:
-        `${workerUrl.origin}/test-upstream`,
-
-      debug:
-        `${workerUrl.origin}/debug`,
-    },
-  });
-}
-
-
-/* =========================================================
-   TEST UPSTREAM
-========================================================= */
-
-async function testUpstream(env) {
-  const started = Date.now();
-
-  let response;
-
-  try {
-    response = await fetch(
-      CONFIG.HLS_URL,
-      {
-        method: "GET",
-
-        headers: upstreamHeaders(
-          env,
-          "application/vnd.apple.mpegurl,*/*"
-        ),
-
-        redirect: "follow",
-      }
-    );
-  } catch (error) {
-    return json(
-      {
-        ok: false,
-        stage: "fetch",
-        error:
-          error?.message ||
-          String(error),
-
-        elapsedMs:
-          Date.now() - started,
-      },
-      502
-    );
-  }
-
-  const body =
-    await response.text();
-
-  return json({
-    ok: response.ok,
-
-    status:
-      response.status,
-
-    statusText:
-      response.statusText,
-
-    elapsedMs:
-      Date.now() - started,
-
-    finalUrl:
-      response.url,
-
-    redirected:
-      response.redirected,
-
-    contentType:
-      response.headers.get(
-        "content-type"
-      ),
-
-    contentLength:
-      response.headers.get(
-        "content-length"
-      ),
-
-    /*
-     * Do not print the Cookie here.
-     */
     cookieConfigured:
       Boolean(
         env.EDGE_CACHE_COOKIE
       ),
 
-    bodyPreview:
-      body.slice(0, 2000),
+    authorizedOrigin:
+      env.AUTHORIZED_HLS_ORIGIN ||
+      null,
+
+    endpoints: {
+      player: "/",
+      channels: "/channels",
+      stream: "/stream?url=...",
+      debug: "/debug",
+    },
   });
 }
 
@@ -535,22 +512,19 @@ async function testUpstream(env) {
 
 function playerPage(request) {
   const origin =
-    new URL(request.url).origin;
-
-  const playlist =
-    `${origin}/playlist.m3u8`;
+    new URL(request.url)
+      .origin;
 
   const html = `<!DOCTYPE html>
-<html lang="en">
-
+<html>
 <head>
 
 <meta charset="UTF-8">
 
 <meta
-  name="viewport"
-  content="width=device-width,initial-scale=1"
-/>
+ name="viewport"
+ content="width=device-width,initial-scale=1"
+>
 
 <title>Live TV</title>
 
@@ -559,108 +533,115 @@ function playerPage(request) {
 <style>
 
 * {
-  box-sizing: border-box;
+ box-sizing: border-box;
 }
 
 body {
-  margin: 0;
+ margin: 0;
+ padding: 16px;
 
-  min-height: 100vh;
+ background:
+ linear-gradient(
+   135deg,
+   #090d16,
+   #172238
+ );
 
-  display: flex;
-  justify-content: center;
-  align-items: center;
+ color: white;
 
-  padding: 16px;
-
-  background:
-    radial-gradient(
-      circle at top,
-      #263852,
-      #10141d 55%,
-      #07090d
-    );
-
-  color: white;
-
-  font-family:
-    Arial,
-    sans-serif;
+ font-family: Arial;
 }
 
-.container {
-  width: 100%;
-  max-width: 900px;
-
-  padding: 16px;
-
-  border-radius: 24px;
-
-  background:
-    rgba(255,255,255,.08);
-
-  border:
-    1px solid rgba(255,255,255,.15);
-
-  backdrop-filter:
-    blur(20px);
-
-  -webkit-backdrop-filter:
-    blur(20px);
-
-  box-shadow:
-    0 20px 70px rgba(0,0,0,.45);
+.app {
+ max-width: 1000px;
+ margin: auto;
 }
 
-.title {
-  font-size: 20px;
-  font-weight: 700;
+.player {
+ background:
+ rgba(255,255,255,.08);
 
-  margin:
-    4px 4px 14px;
+ border:
+ 1px solid rgba(255,255,255,.15);
+
+ border-radius: 22px;
+
+ padding: 14px;
+
+ backdrop-filter: blur(20px);
 }
 
 video {
-  width: 100%;
+ width: 100%;
 
-  display: block;
+ aspect-ratio: 16/9;
 
-  background: #000;
+ background: black;
 
-  border-radius: 16px;
-
-  aspect-ratio: 16 / 9;
+ border-radius: 16px;
 }
 
-.status {
-  margin-top: 12px;
+#channels {
+ display: grid;
 
-  padding: 12px;
+ grid-template-columns:
+ repeat(
+   auto-fill,
+   minmax(150px,1fr)
+ );
 
-  border-radius: 14px;
+ gap: 10px;
 
-  background:
-    rgba(0,0,0,.25);
-
-  font-size: 14px;
-
-  word-break: break-word;
+ margin-top: 15px;
 }
 
-button {
-  margin-top: 12px;
+.channel {
+ padding: 10px;
 
-  padding: 11px 15px;
+ border-radius: 15px;
 
-  border-radius: 12px;
+ background:
+ rgba(255,255,255,.08);
 
-  border:
-    1px solid rgba(255,255,255,.2);
+ border:
+ 1px solid
+ rgba(255,255,255,.12);
 
-  background:
-    rgba(255,255,255,.1);
+ cursor: pointer;
+}
 
-  color: white;
+.channel img {
+ width: 55px;
+ height: 55px;
+
+ object-fit: contain;
+
+ display: block;
+
+ margin-bottom: 7px;
+}
+
+.name {
+ font-weight: bold;
+}
+
+.category {
+ opacity: .65;
+
+ font-size: 12px;
+
+ margin-top: 4px;
+}
+
+#status {
+ margin-top: 10px;
+
+ padding: 10px;
+
+ border-radius: 12px;
+
+ background:
+ rgba(0,0,0,.25);
 }
 
 </style>
@@ -669,184 +650,247 @@ button {
 
 <body>
 
-<div class="container">
+<div class="app">
 
-<div class="title">
-Live TV
-</div>
+<div class="player">
+
+<h2>Live TV</h2>
 
 <video
-  id="video"
-  controls
-  playsinline
-  preload="auto">
+ id="video"
+ controls
+ playsinline>
 </video>
 
-<div
-  id="status"
-  class="status">
-Loading...
+<div id="status">
+Loading channels...
 </div>
 
-<button
-  onclick="location.href='/debug'">
-Debug
-</button>
+<div id="channels"></div>
 
-<button
-  onclick="location.href='/test-upstream'">
-Test Upstream
-</button>
+</div>
 
 </div>
 
 <script>
 
+const API =
+ ${JSON.stringify(origin)};
+
 const video =
-  document.getElementById("video");
+ document.getElementById("video");
 
 const status =
-  document.getElementById("status");
+ document.getElementById("status");
 
-const playlist =
-  ${JSON.stringify(playlist)};
+const container =
+ document.getElementById("channels");
+
+let hls = null;
+
 
 function setStatus(text) {
-  status.textContent = text;
-  console.log(text);
+ status.textContent = text;
 }
 
-if (
-  window.Hls &&
-  Hls.isSupported()
-) {
 
-  const hls =
-    new Hls({
-      enableWorker: true,
+async function loadChannels() {
 
-      lowLatencyMode: true,
+ try {
 
-      backBufferLength: 30,
+   const response =
+     await fetch(
+       API + "/channels"
+     );
 
-      manifestLoadingMaxRetry: 3,
+   const data =
+     await response.json();
 
-      levelLoadingMaxRetry: 3,
+   if (
+     !data.ok
+   ) {
+     throw new Error(
+       data.error ||
+       "Unable to load channels"
+     );
+   }
 
-      fragLoadingMaxRetry: 3
-    });
+   container.innerHTML = "";
 
-  hls.on(
-    Hls.Events.MANIFEST_LOADING,
-    () => {
-      setStatus(
-        "Loading playlist..."
-      );
-    }
-  );
+   data.channels.forEach(
+     (channel) => {
 
-  hls.on(
-    Hls.Events.MANIFEST_PARSED,
-    () => {
+       const card =
+         document.createElement(
+           "div"
+         );
 
-      setStatus(
-        "Playlist loaded. Press Play."
-      );
+       card.className =
+         "channel";
 
-      video.play()
-        .catch(() => {});
-    }
-  );
+       card.innerHTML = \`
+         <img
+           src="\${channel.logo || ""}"
+           onerror="this.style.display='none'"
+         >
 
-  hls.on(
-    Hls.Events.FRAG_LOADED,
-    () => {
+         <div class="name">
+           \${escapeHtml(channel.name)}
+         </div>
 
-      setStatus(
-        "Video data received."
-      );
-    }
-  );
+         <div class="category">
+           \${escapeHtml(channel.category)}
+         </div>
+       \`;
 
-  hls.on(
-    Hls.Events.ERROR,
-    (event, data) => {
+       card.onclick =
+         () => playChannel(
+           channel
+         );
 
-      console.error(
-        "HLS ERROR:",
-        data
-      );
+       container.appendChild(
+         card
+       );
+     }
+   );
 
-      setStatus(
-        "HLS Error: " +
-        data.type +
-        " / " +
-        data.details
-      );
+   setStatus(
+     data.total +
+     " channels loaded"
+   );
 
-      if (
-        data.fatal &&
-        data.type ===
-        Hls.ErrorTypes.NETWORK_ERROR
-      ) {
-        hls.startLoad();
-      }
+ } catch (error) {
 
-      if (
-        data.fatal &&
-        data.type ===
-        Hls.ErrorTypes.MEDIA_ERROR
-      ) {
-        hls.recoverMediaError();
-      }
-    }
-  );
+   console.error(error);
 
-  hls.loadSource(playlist);
-
-  hls.attachMedia(video);
-
-} else if (
-  video.canPlayType(
-    "application/vnd.apple.mpegurl"
-  )
-) {
-
-  video.src = playlist;
-
-  video.addEventListener(
-    "loadedmetadata",
-    () => {
-
-      setStatus(
-        "Playlist loaded. Press Play."
-      );
-
-      video.play()
-        .catch(() => {});
-    }
-  );
-
-} else {
-
-  setStatus(
-    "HLS is not supported."
-  );
+   setStatus(
+     "Channel error: " +
+     error.message
+   );
+ }
 }
 
-video.addEventListener(
-  "error",
-  () => {
 
-    if (video.error) {
+function playChannel(channel) {
 
-      setStatus(
-        "Video error code: " +
-        video.error.code
-      );
-    }
-  }
-);
+ if (!channel.link) {
+   setStatus(
+     "Channel URL unavailable"
+   );
+
+   return;
+ }
+
+ const proxyUrl =
+   API +
+   "/stream?url=" +
+   encodeURIComponent(
+     channel.link
+   );
+
+ if (
+   hls
+ ) {
+   hls.destroy();
+
+   hls = null;
+ }
+
+ if (
+   window.Hls &&
+   Hls.isSupported()
+ ) {
+
+   hls =
+     new Hls({
+       enableWorker: true,
+
+       lowLatencyMode: true,
+
+       backBufferLength: 30
+     });
+
+   hls.on(
+     Hls.Events.MANIFEST_PARSED,
+     () => {
+
+       setStatus(
+         "Playing: " +
+         channel.name
+       );
+
+       video.play()
+         .catch(() => {});
+     }
+   );
+
+   hls.on(
+     Hls.Events.ERROR,
+     (event, data) => {
+
+       console.error(
+         "HLS ERROR",
+         data
+       );
+
+       setStatus(
+         "HLS Error: " +
+         data.details
+       );
+     }
+   );
+
+   hls.loadSource(
+     proxyUrl
+   );
+
+   hls.attachMedia(
+     video
+   );
+
+ } else if (
+   video.canPlayType(
+     "application/vnd.apple.mpegurl"
+   )
+ ) {
+
+   video.src =
+     proxyUrl;
+
+   video.play()
+     .catch(() => {});
+
+ }
+}
+
+
+function escapeHtml(value) {
+
+ return String(value || "")
+   .replace(
+     /&/g,
+     "&amp;"
+   )
+   .replace(
+     /</g,
+     "&lt;"
+   )
+   .replace(
+     />/g,
+     "&gt;"
+   )
+   .replace(
+     /"/g,
+     "&quot;"
+   )
+   .replace(
+     /'/g,
+     "&#039;"
+   );
+}
+
+
+loadChannels();
 
 </script>
 
@@ -856,14 +900,9 @@ video.addEventListener(
   return new Response(
     html,
     {
-      status: 200,
-
       headers: {
         "Content-Type":
           "text/html; charset=utf-8",
-
-        "Cache-Control":
-          "no-store",
       },
     }
   );
@@ -898,24 +937,28 @@ function guessContentType(
   const path =
     pathname.toLowerCase();
 
-  if (path.endsWith(".m3u8")) {
+  if (
+    path.endsWith(".m3u8")
+  ) {
     return "application/vnd.apple.mpegurl";
   }
 
-  if (path.endsWith(".ts")) {
+  if (
+    path.endsWith(".ts")
+  ) {
     return "video/mp2t";
   }
 
-  if (path.endsWith(".aac")) {
+  if (
+    path.endsWith(".aac")
+  ) {
     return "audio/aac";
   }
 
-  if (path.endsWith(".m4s")) {
+  if (
+    path.endsWith(".m4s")
+  ) {
     return "video/iso.segment";
-  }
-
-  if (path.endsWith(".mp4")) {
-    return "video/mp4";
   }
 
   return "application/octet-stream";
@@ -924,7 +967,8 @@ function guessContentType(
 
 function corsHeaders() {
   return {
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin":
+      "*",
 
     "Access-Control-Allow-Methods":
       "GET, OPTIONS",
