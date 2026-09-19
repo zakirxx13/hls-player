@@ -6,7 +6,7 @@
 // Configuration
 const CONFIG = {
   // Base URL for the stream (without playlist.m3u8)
-  baseUrl: 'https://bldcmprod-cdn.toffeelive.com/cdn/live/desh_tv/playlist.m3u8',
+  baseUrl: 'https://bldcmprod-cdn.toffeelive.com/cdn/live/desh_tv',
   // Authentication cookie
   cookie: 'Edge-Cache-Cookie=URLPrefix=aHR0cHM6Ly9ibGRjbXByb2QtY2RuLnRvZmZlZWxpdmUuY29t:Expires=1790010960:KeyName=prod_linear:Signature=VX2pepfUQvVv0i_2f7wSdPISEndX5duKPnyA5rQesQOVDZ8S-P2mXOYk7QFYC4L96cQ2yURkoUFl0ahEkW4aDQ',
   // User agent
