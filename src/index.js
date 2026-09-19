@@ -6,9 +6,9 @@
 // Configuration
 const CONFIG = {
   // Base URL for the stream (without playlist.m3u8)
-  baseUrl: 'https://bldcmprod-cdn.toffeelive.com/cdn/live/jamuna_tv',
+  baseUrl: 'https://bldcmprod-cdn.toffeelive.com/cdn/live/desh_tv/playlist.m3u8',
   // Authentication cookie
-  cookie: 'Edge-Cache-Cookie=URLPrefix=aHR0cHM6Ly9ibGRjbXByb2QtY2RuLnRvZmZlZWxpdmUuY29t:Expires=1790009400:KeyName=prod_linear:Signature=xMljSvmCVtgmO_vZGPxckgUbFKrfJwU6G6xLvINarudszkYcVYS1VzrOpnICdQCARYlpOML5YN95R1_BRJiQDg',
+  cookie: 'Edge-Cache-Cookie=URLPrefix=aHR0cHM6Ly9ibGRjbXByb2QtY2RuLnRvZmZlZWxpdmUuY29t:Expires=1790010960:KeyName=prod_linear:Signature=VX2pepfUQvVv0i_2f7wSdPISEndX5duKPnyA5rQesQOVDZ8S-P2mXOYk7QFYC4L96cQ2yURkoUFl0ahEkW4aDQ',
   // User agent
   userAgent: 'okhttp/4.11.0',
   // Logo URL (optional, for reference)
