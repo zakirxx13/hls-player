@@ -1,27 +1,8 @@
 /*
  * ============================================================
- * SOMOY TV - HLS CLOUDFLARE WORKER
- * ============================================================
- *
- * Homepage:
- *   /
- *
- * Health:
- *   /health
- *
- * HLS:
- *   /cdn/live/somoy_tv/playlist.m3u8
- *
- * Proxy:
- *   /proxy/cdn/live/somoy_tv/...
- *
+ * HLS DEBUG PROXY - SOMOY TV
  * ============================================================
  */
-
-
-/* ============================================================
-   CHANNEL DATA
-   ============================================================ */
 
 const CHANNEL = {
   category: "News Channel",
@@ -35,38 +16,136 @@ const CHANNEL = {
     "https://assets-prod.services.toffeelive.com//Xi_Ga5oBNnOkwJLWkhKP/posters/ef2899d5-1ae4-4fee-aee5-45f9b0b3ba80.png",
 
   /*
-   * IMPORTANT:
+   * তোমার authorized Edge-Cache-Cookie এখানে বসাও।
    *
-   * Put your authorized Edge-Cache-Cookie here.
+   * Format:
    *
-   * Do NOT publish this value in GitHub.
+   * Edge-Cache-Cookie=...
+   *
+   * এখানে নিজের আসল value বসাবে।
    */
   cookie:
-    "Edge-Cache-Cookie=URLPrefix=aHR0cHM6Ly9ibGRjbXByb2QtY2RuLnRvZmZlZWxpdmUuY29t:Expires=1790008980:KeyName=prod_linear:Signature=gOntAaGoMqPzjgvez0CKt0b96wi6llY142HtRMr6sSZmqtPn0uAN8IOA54Tkf2BONxKfnBuu4-yPmwHkVFk5Bg",
+    "PASTE_YOUR_EDGE_CACHE_COOKIE_HERE",
 
   user_agent:
     "okhttp/4.11.0"
 };
 
 
-/* ============================================================
-   CDN CONFIG
-   ============================================================ */
-
 const CDN_HOST =
   "bldcmprod-cdn.toffeelive.com";
 
-const CDN_USER_AGENT =
-  CHANNEL.user_agent;
+
+/*
+ * ============================================================
+ * DEBUG LOGGER
+ * ============================================================
+ */
+
+function debugLog(...args) {
+
+  console.log(
+    "[HLS DEBUG]",
+    ...args
+  );
+
+}
 
 
-/* ============================================================
-   PLAYER HTML
-   ============================================================ */
+/*
+ * ============================================================
+ * CORS
+ * ============================================================
+ */
+
+function corsHeaders() {
+
+  return {
+
+    "Access-Control-Allow-Origin": "*",
+
+    "Access-Control-Allow-Methods":
+      "GET, HEAD, OPTIONS",
+
+    "Access-Control-Allow-Headers":
+      "*",
+
+    "Access-Control-Expose-Headers":
+      "*"
+
+  };
+
+}
+
+
+function addCors(headers) {
+
+  headers.set(
+    "Access-Control-Allow-Origin",
+    "*"
+  );
+
+  headers.set(
+    "Access-Control-Allow-Methods",
+    "GET, HEAD, OPTIONS"
+  );
+
+  headers.set(
+    "Access-Control-Allow-Headers",
+    "*"
+  );
+
+  headers.set(
+    "Access-Control-Expose-Headers",
+    "*"
+  );
+
+}
+
+
+/*
+ * ============================================================
+ * JSON
+ * ============================================================
+ */
+
+function json(data, status = 200) {
+
+  return new Response(
+
+    JSON.stringify(
+      data,
+      null,
+      2
+    ),
+
+    {
+
+      status,
+
+      headers: {
+        "Content-Type":
+          "application/json",
+
+        ...corsHeaders()
+      }
+
+    }
+
+  );
+
+}
+
+
+/*
+ * ============================================================
+ * PLAYER
+ * ============================================================
+ */
 
 const PLAYER_HTML = `<!DOCTYPE html>
 
-<html lang="en">
+<html>
 
 <head>
 
@@ -74,22 +153,20 @@ const PLAYER_HTML = `<!DOCTYPE html>
 
 <meta
   name="viewport"
-  content="width=device-width, initial-scale=1.0"
+  content="width=device-width,initial-scale=1"
 >
 
-<title>${CHANNEL.name}</title>
+<title>Somoy TV - Debug Player</title>
 
 <script
   src="https://cdn.jsdelivr.net/npm/hls.js@latest">
 </script>
-
 
 <style>
 
 * {
   box-sizing: border-box;
 }
-
 
 body {
 
@@ -98,11 +175,7 @@ body {
   min-height: 100vh;
 
   background:
-    radial-gradient(
-      circle at top,
-      #263238,
-      #080808 65%
-    );
+    #080808;
 
   color: white;
 
@@ -110,16 +183,9 @@ body {
     Arial,
     sans-serif;
 
-  display: flex;
-
-  align-items: center;
-
-  justify-content: center;
-
   padding: 20px;
 
 }
-
 
 .container {
 
@@ -128,41 +194,25 @@ body {
     100%
   );
 
-  background:
-    rgba(
-      255,
-      255,
-      255,
-      0.08
-    );
-
-  border:
-    1px solid
-    rgba(
-      255,
-      255,
-      255,
-      0.15
-    );
-
-  border-radius: 22px;
-
-  overflow: hidden;
-
-  backdrop-filter:
-    blur(20px);
-
-  box-shadow:
-    0 20px 60px
-    rgba(
-      0,
-      0,
-      0,
-      0.5
-    );
+  margin: auto;
 
 }
 
+.card {
+
+  background:
+    #151515;
+
+  border:
+    1px solid #333;
+
+  border-radius:
+    18px;
+
+  overflow:
+    hidden;
+
+}
 
 video {
 
@@ -170,12 +220,12 @@ video {
 
   display: block;
 
-  aspect-ratio: 16 / 9;
-
   background: #000;
 
-}
+  aspect-ratio:
+    16 / 9;
 
+}
 
 .info {
 
@@ -183,62 +233,78 @@ video {
 
 }
 
+.title {
 
-.channel {
-
-  display: flex;
-
-  align-items: center;
-
-  gap: 12px;
-
-}
-
-
-.logo {
-
-  width: 48px;
-
-  height: 48px;
-
-  border-radius: 12px;
-
-  object-fit: contain;
-
-  background: #fff;
-
-}
-
-
-.name {
-
-  font-size: 20px;
+  font-size: 21px;
 
   font-weight: bold;
 
 }
 
-
-.category {
-
-  margin-top: 4px;
-
-  font-size: 13px;
-
-  color: #aaa;
-
-}
-
-
 .status {
 
-  margin-top: 14px;
+  margin-top: 10px;
+
+  padding: 12px;
+
+  border-radius: 10px;
+
+  background:
+    #202020;
+
+  color: #aaa;
 
   font-size: 14px;
 
-  color: #aaa;
-
   word-break: break-word;
+
+}
+
+pre {
+
+  white-space:
+    pre-wrap;
+
+  word-break:
+    break-word;
+
+  background:
+    #050505;
+
+  padding:
+    12px;
+
+  border-radius:
+    10px;
+
+  font-size:
+    12px;
+
+  color:
+    #aaa;
+
+  overflow:
+    auto;
+
+}
+
+button {
+
+  margin-top:
+    10px;
+
+  padding:
+    10px 15px;
+
+  border: 0;
+
+  border-radius:
+    10px;
+
+  background:
+    #2b2b2b;
+
+  color: white;
 
 }
 
@@ -249,76 +315,63 @@ video {
 
 <body>
 
-
 <div class="container">
 
+  <div class="card">
 
-  <video
-    id="video"
-    controls
-    playsinline>
-  </video>
+    <video
+      id="video"
+      controls
+      playsinline>
+    </video>
 
+    <div class="info">
 
-  <div class="info">
+      <div class="title">
+        Somoy TV
+      </div>
 
+      <div
+        id="status"
+        class="status">
 
-    <div class="channel">
-
-
-      <img
-        class="logo"
-        src="${CHANNEL.logo}"
-        alt="${CHANNEL.name}"
-      >
-
-
-      <div>
-
-
-        <div class="name">
-          ${CHANNEL.name}
-        </div>
-
-
-        <div class="category">
-          ${CHANNEL.category}
-        </div>
-
+        Starting...
 
       </div>
 
+      <button
+        onclick="testM3U8()">
+
+        Test M3U8
+
+      </button>
+
+      <pre id="debug">
+Waiting for debug information...
+      </pre>
 
     </div>
-
-
-    <div
-      class="status"
-      id="status">
-
-      Connecting...
-
-    </div>
-
 
   </div>
-
 
 </div>
 
 
 <script>
 
-
 const video =
   document.getElementById(
     "video"
   );
 
-
 const status =
   document.getElementById(
     "status"
+  );
+
+const debug =
+  document.getElementById(
+    "debug"
   );
 
 
@@ -335,50 +388,303 @@ function setStatus(text) {
 }
 
 
-/* ============================================================
-   HLS.JS
-   ============================================================ */
+function setDebug(data) {
+
+  debug.textContent =
+    typeof data === "string"
+      ? data
+      : JSON.stringify(
+          data,
+          null,
+          2
+        );
+
+}
+
+
+/*
+ * ============================================================
+ * DIRECT M3U8 TEST
+ * ============================================================
+ */
+
+async function testM3U8() {
+
+  setStatus(
+    "Testing M3U8..."
+  );
+
+  setDebug(
+    "Requesting:\\n" +
+    stream
+  );
+
+  try {
+
+    const response =
+      await fetch(
+        stream,
+        {
+          method:
+            "GET",
+
+          cache:
+            "no-store"
+        }
+      );
+
+
+    const text =
+      await response.text();
+
+
+    setDebug({
+
+      url:
+        stream,
+
+      status:
+        response.status,
+
+      statusText:
+        response.statusText,
+
+      contentType:
+        response.headers.get(
+          "content-type"
+        ),
+
+      contentLength:
+        response.headers.get(
+          "content-length"
+        ),
+
+      first500:
+        text.substring(
+          0,
+          500
+        )
+
+    });
+
+
+    if (
+      !response.ok
+    ) {
+
+      setStatus(
+        "M3U8 HTTP error: " +
+        response.status
+      );
+
+      return;
+
+    }
+
+
+    if (
+      text.includes(
+        "#EXTM3U"
+      )
+    ) {
+
+      setStatus(
+        "M3U8 received successfully"
+      );
+
+    }
+    else {
+
+      setStatus(
+        "Response received, but not a valid M3U8"
+      );
+
+    }
+
+  }
+
+  catch(error) {
+
+    setStatus(
+      "M3U8 network error"
+    );
+
+    setDebug({
+
+      error:
+        String(error),
+
+      name:
+        error.name,
+
+      message:
+        error.message,
+
+      url:
+        stream
+
+    });
+
+  }
+
+}
+
+
+/*
+ * ============================================================
+ * HLS.JS
+ * ============================================================
+ */
 
 if (
   window.Hls &&
   Hls.isSupported()
 ) {
 
-
   const hls =
     new Hls({
 
-      enableWorker: true,
+      enableWorker:
+        true,
 
-      lowLatencyMode: true
+      lowLatencyMode:
+        true,
+
+      debug:
+        true
 
     });
 
 
-  hls.loadSource(
-    stream
+  hls.on(
+    Hls.Events.MEDIA_ATTACHED,
+
+    function() {
+
+      setStatus(
+        "Media attached. Loading playlist..."
+      );
+
+    }
   );
 
 
-  hls.attachMedia(
-    video
+  hls.on(
+    Hls.Events.MANIFEST_LOADING,
+
+    function(
+      event,
+      data
+    ) {
+
+      setStatus(
+        "Loading M3U8..."
+      );
+
+      setDebug({
+
+        event:
+          "MANIFEST_LOADING",
+
+        url:
+          data.url
+
+      });
+
+    }
+  );
+
+
+  hls.on(
+    Hls.Events.MANIFEST_LOADED,
+
+    function(
+      event,
+      data
+    ) {
+
+      setDebug({
+
+        event:
+          "MANIFEST_LOADED",
+
+        url:
+          data.url,
+
+        stats:
+          data.stats
+
+      });
+
+    }
   );
 
 
   hls.on(
     Hls.Events.MANIFEST_PARSED,
 
-    function() {
+    function(
+      event,
+      data
+    ) {
 
       setStatus(
-        "Stream connected"
+        "Manifest parsed successfully"
       );
+
+      setDebug({
+
+        event:
+          "MANIFEST_PARSED",
+
+        levels:
+          data.levels?.length,
+
+        firstLevel:
+          data.levels?.[0]
+
+      });
+
 
       video
         .play()
         .catch(
-          function() {}
+          function(error) {
+
+            setDebug({
+
+              autoplay:
+                "blocked",
+
+              error:
+                String(error)
+
+            });
+
+          }
         );
+
+    }
+  );
+
+
+  hls.on(
+    Hls.Events.FRAG_LOADING,
+
+    function(
+      event,
+      data
+    ) {
+
+      setDebug({
+
+        event:
+          "FRAG_LOADING",
+
+        url:
+          data.frag?.url
+
+      });
 
     }
   );
@@ -392,39 +698,80 @@ if (
       data
     ) {
 
-      console.log(
-        "HLS error:",
+      console.error(
+        "HLS ERROR:",
         data
       );
 
 
-      if (
-        data.fatal
-      ) {
+      setStatus(
 
-        setStatus(
-          "HLS error: " +
-          data.type
-        );
+        "HLS error: " +
+        data.type +
+        " / " +
+        data.details
 
-      }
+      );
+
+
+      setDebug({
+
+        event:
+          "HLS_ERROR",
+
+        type:
+          data.type,
+
+        details:
+          data.details,
+
+        fatal:
+          data.fatal,
+
+        url:
+          data.url,
+
+        response:
+          data.response,
+
+        networkDetails:
+          data.networkDetails
+            ? String(
+                data.networkDetails
+              )
+            : null
+
+      });
 
     }
+  );
+
+
+  hls.loadSource(
+    stream
+  );
+
+
+  hls.attachMedia(
+    video
   );
 
 }
 
 
-/* ============================================================
-   NATIVE HLS
-   ============================================================ */
+/*
+ * ============================================================
+ * NATIVE HLS
+ * ============================================================
+ */
 
 else if (
+
   video.canPlayType(
     "application/vnd.apple.mpegurl"
   )
-) {
 
+) {
 
   video.src =
     stream;
@@ -436,53 +783,171 @@ else if (
     function() {
 
       setStatus(
-        "Stream connected"
+        "Native HLS loaded"
       );
 
-      video
-        .play()
-        .catch(
-          function() {}
-        );
-
     }
+
   );
 
 }
 
 
-/* ============================================================
-   HLS NOT SUPPORTED
-   ============================================================ */
+/*
+ * ============================================================
+ * NOT SUPPORTED
+ * ============================================================
+ */
 
 else {
 
   setStatus(
-    "HLS is not supported by this browser."
+    "HLS is not supported"
   );
 
 }
 
-
 </script>
-
 
 </body>
 
 </html>`;
 
 
-/* ============================================================
-   CLOUDFLARE WORKER
-   ============================================================ */
+/*
+ * ============================================================
+ * PLAYLIST REWRITE
+ * ============================================================
+ */
+
+function rewritePlaylist(
+  playlist,
+  currentURL
+) {
+
+  return playlist
+    .split(/\r?\n/)
+    .map(function(line) {
+
+      const trimmed =
+        line.trim();
+
+
+      if (!trimmed) {
+        return line;
+      }
+
+
+      /*
+       * HLS tags containing URI
+       */
+
+      if (
+        trimmed.startsWith("#")
+      ) {
+
+        return line.replace(
+
+          /URI="([^"]+)"/g,
+
+          function(
+            match,
+            uri
+          ) {
+
+            return (
+              'URI="' +
+              convertURL(
+                uri,
+                currentURL
+              ) +
+              '"'
+            );
+
+          }
+
+        );
+
+      }
+
+
+      /*
+       * Segment / nested playlist
+       */
+
+      return convertURL(
+        trimmed,
+        currentURL
+      );
+
+    })
+    .join("\n");
+
+}
+
+
+/*
+ * ============================================================
+ * URL REWRITE
+ * ============================================================
+ */
+
+function convertURL(
+  resource,
+  currentURL
+) {
+
+  try {
+
+    const absolute =
+      new URL(
+        resource,
+        currentURL
+      );
+
+
+    /*
+     * Only rewrite our CDN.
+     */
+
+    if (
+      absolute.hostname !==
+      CDN_HOST
+    ) {
+
+      return resource;
+
+    }
+
+
+    return (
+      "/proxy" +
+      absolute.pathname +
+      absolute.search
+    );
+
+  }
+
+  catch {
+
+    return resource;
+
+  }
+
+}
+
+
+/*
+ * ============================================================
+ * WORKER
+ * ============================================================
+ */
 
 export default {
-
 
   async fetch(
     request
   ) {
-
 
     const url =
       new URL(
@@ -490,9 +955,9 @@ export default {
       );
 
 
-    /* ========================================================
-       OPTIONS / CORS
-       ======================================================== */
+    /*
+     * OPTIONS
+     */
 
     if (
       request.method ===
@@ -503,7 +968,6 @@ export default {
         null,
         {
           status: 204,
-
           headers:
             corsHeaders()
         }
@@ -512,24 +976,19 @@ export default {
     }
 
 
-    /* ========================================================
-       ALLOW GET / HEAD ONLY
-       ======================================================== */
+    /*
+     * Methods
+     */
 
     if (
-      request.method !==
-        "GET" &&
-
-      request.method !==
-        "HEAD"
+      request.method !== "GET" &&
+      request.method !== "HEAD"
     ) {
 
       return new Response(
         "Method Not Allowed",
-
         {
           status: 405,
-
           headers:
             corsHeaders()
         }
@@ -538,22 +997,18 @@ export default {
     }
 
 
-    /* ========================================================
-       HOMEPAGE
-       ======================================================== */
+    /*
+     * Homepage
+     */
 
     if (
       url.pathname === "/" ||
-
-      url.pathname ===
-      "/index.html"
+      url.pathname === "/index.html"
     ) {
 
       return new Response(
         PLAYER_HTML,
-
         {
-
           status: 200,
 
           headers: {
@@ -565,75 +1020,76 @@ export default {
               "no-store"
 
           }
-
         }
       );
 
     }
 
 
-    /* ========================================================
-       HEALTH CHECK
-       ======================================================== */
+    /*
+     * Health
+     */
 
     if (
-      url.pathname ===
-      "/health"
+      url.pathname === "/health"
     ) {
 
-      return json(
+      return json({
 
-        {
+        ok: true,
 
-          ok: true,
+        worker:
+          "online",
 
-          worker:
-            "online",
+        channel:
+          CHANNEL.name,
 
-          channel:
-            CHANNEL.name,
+        category:
+          CHANNEL.category,
 
-          category:
-            CHANNEL.category,
+        upstream:
+          CHANNEL.link,
 
-          upstream:
-            CHANNEL.link,
+        user_agent:
+          CHANNEL.user_agent,
 
-          user_agent:
-            CHANNEL.user_agent,
+        cookie_configured:
+          CHANNEL.cookie !==
+          "PASTE_YOUR_EDGE_CACHE_COOKIE_HERE",
 
-          cookie_configured:
-            CHANNEL.cookie !==
-            "PASTE_YOUR_EDGE_CACHE_COOKIE_HERE",
+        cookie_length:
+          CHANNEL.cookie.length,
 
-          time:
-            new Date()
-              .toISOString()
+        time:
+          new Date()
+            .toISOString()
 
-        },
-
-        200
-
-      );
+      });
 
     }
 
 
-    /* ========================================================
-       ONLY HLS LIVE PATH
-       ======================================================== */
+    /*
+     * Debug upstream endpoint
+     */
+
+    if (
+      url.pathname ===
+      "/debug/upstream"
+    ) {
+
+      return await debugUpstream();
+
+    }
+
+
+    /*
+     * Proxy path
+     */
 
     let pathname =
       url.pathname;
 
-
-    /*
-     * /proxy/cdn/live/...
-     *
-     * becomes
-     *
-     * /cdn/live/...
-     */
 
     if (
       pathname.startsWith(
@@ -650,8 +1106,7 @@ export default {
 
 
     /*
-     * Prevent this Worker from becoming
-     * an arbitrary open proxy.
+     * Only Somoy TV
      */
 
     if (
@@ -662,68 +1117,64 @@ export default {
 
       return new Response(
         "Not Found",
-
         {
-
           status: 404,
-
           headers:
             corsHeaders()
-
         }
-
       );
 
     }
 
 
-    /* ========================================================
-       UPSTREAM URL
-       ======================================================== */
+    /*
+     * Upstream URL
+     */
 
     const upstreamURL =
-      `https://${CDN_HOST}` +
-      `${pathname}` +
-      `${url.search}`;
+      "https://" +
+      CDN_HOST +
+      pathname +
+      url.search;
 
 
-    /* ========================================================
-       UPSTREAM HEADERS
-       ======================================================== */
+    /*
+     * Headers
+     */
 
-    const upstreamHeaders =
+    const headers =
       new Headers();
 
 
-    upstreamHeaders.set(
+    headers.set(
       "User-Agent",
       CDN_USER_AGENT
     );
 
 
-    upstreamHeaders.set(
+    headers.set(
       "Accept",
       "*/*"
     );
 
 
-    upstreamHeaders.set(
+    headers.set(
       "Accept-Encoding",
       "identity"
     );
 
 
     /*
-     * Authorized CDN cookie.
+     * COOKIE
      */
 
     if (
       CHANNEL.cookie &&
       CHANNEL.cookie !==
-      "PASTE_YOUR_EDGE_CACHE_COOKIE_HERE"
+        "PASTE_YOUR_EDGE_CACHE_COOKIE_HERE"
     ) {
 
-      upstreamHeaders.set(
+      headers.set(
         "Cookie",
         CHANNEL.cookie
       );
@@ -732,7 +1183,7 @@ export default {
 
 
     /*
-     * Forward Range.
+     * Range
      */
 
     const range =
@@ -743,7 +1194,7 @@ export default {
 
     if (range) {
 
-      upstreamHeaders.set(
+      headers.set(
         "Range",
         range
       );
@@ -751,16 +1202,48 @@ export default {
     }
 
 
-    /* ========================================================
-       FETCH CDN
-       ======================================================== */
+    /*
+     * Debug log
+     *
+     * Cookie value is NEVER logged.
+     */
 
-    let upstream;
+    debugLog(
+      "REQUEST",
+      {
+        method:
+          request.method,
+
+        pathname,
+
+        upstreamURL,
+
+        cookie:
+          Boolean(
+            CHANNEL.cookie &&
+            CHANNEL.cookie !==
+              "PASTE_YOUR_EDGE_CACHE_COOKIE_HERE"
+          ),
+
+        userAgent:
+          CDN_USER_AGENT,
+
+        range:
+          range || null
+      }
+    );
+
+
+    /*
+     * Fetch
+     */
+
+    let response;
 
 
     try {
 
-      upstream =
+      response =
         await fetch(
 
           upstreamURL,
@@ -770,8 +1253,7 @@ export default {
             method:
               request.method,
 
-            headers:
-              upstreamHeaders,
+            headers,
 
             redirect:
               "follow"
@@ -783,6 +1265,12 @@ export default {
     }
 
     catch (error) {
+
+      console.error(
+        "[UPSTREAM FETCH ERROR]",
+        error
+      );
+
 
       return json(
 
@@ -808,18 +1296,42 @@ export default {
     }
 
 
-    /* ========================================================
-       RESPONSE INFORMATION
-       ======================================================== */
+    /*
+     * Response info
+     */
 
     const contentType =
-      upstream.headers.get(
+      response.headers.get(
         "Content-Type"
       ) || "";
 
 
-    const isPlaylist =
+    console.log(
+      "[UPSTREAM RESPONSE]",
+      {
 
+        status:
+          response.status,
+
+        contentType,
+
+        contentLength:
+          response.headers.get(
+            "Content-Length"
+          ),
+
+        target:
+          upstreamURL
+
+      }
+    );
+
+
+    /*
+     * Playlist
+     */
+
+    const isM3U8 =
       pathname.endsWith(
         ".m3u8"
       ) ||
@@ -833,58 +1345,63 @@ export default {
       );
 
 
-    /* ========================================================
-       M3U8 PLAYLIST
-       ======================================================== */
-
-    if (isPlaylist) {
-
+    if (isM3U8) {
 
       const playlist =
-        await upstream.text();
+        await response.text();
+
+
+      console.log(
+        "[M3U8]",
+        {
+
+          status:
+            response.status,
+
+          length:
+            playlist.length,
+
+          valid:
+            playlist.includes(
+              "#EXTM3U"
+            )
+
+        }
+      );
 
 
       const rewritten =
         rewritePlaylist(
-
           playlist,
-
           upstreamURL
-
         );
 
 
-      const headers =
+      const outHeaders =
         new Headers(
-          upstream.headers
+          response.headers
         );
 
 
-      headers.set(
-
+      outHeaders.set(
         "Content-Type",
-
         "application/vnd.apple.mpegurl"
-
       );
 
 
-      headers.set(
-
+      outHeaders.set(
         "Cache-Control",
-
         "no-store"
-
       );
 
 
-      headers.delete(
+      outHeaders.delete(
         "Set-Cookie"
       );
 
 
       addCors(
-        headers
+        outHeaders
       );
 
 
@@ -895,13 +1412,13 @@ export default {
         {
 
           status:
-            upstream.status,
+            response.status,
 
           statusText:
-            upstream.statusText,
+            response.statusText,
 
           headers:
-            headers
+            outHeaders
 
         }
 
@@ -910,40 +1427,40 @@ export default {
     }
 
 
-    /* ========================================================
-       VIDEO SEGMENT / KEY / OTHER HLS RESOURCE
-       ======================================================== */
+    /*
+     * Segment / key
+     */
 
-    const responseHeaders =
+    const outHeaders =
       new Headers(
-        upstream.headers
+        response.headers
       );
 
 
-    responseHeaders.delete(
+    outHeaders.delete(
       "Set-Cookie"
     );
 
 
     addCors(
-      responseHeaders
+      outHeaders
     );
 
 
     return new Response(
 
-      upstream.body,
+      response.body,
 
       {
 
         status:
-          upstream.status,
+          response.status,
 
         statusText:
-          upstream.statusText,
+          response.statusText,
 
         headers:
-          responseHeaders
+          outHeaders
 
       }
 
@@ -954,274 +1471,146 @@ export default {
 };
 
 
-/* ============================================================
-   PLAYLIST REWRITER
-   ============================================================ */
+/*
+ * ============================================================
+ * DIRECT UPSTREAM DEBUG
+ * ============================================================
+ */
 
-function rewritePlaylist(
+async function debugUpstream() {
 
-  playlist,
-
-  currentURL
-
-) {
-
-
-  return playlist
-
-    .split(/\r?\n/)
-
-    .map(
-
-      function(line) {
+  const headers =
+    new Headers();
 
 
-        const trimmed =
-          line.trim();
+  headers.set(
+    "User-Agent",
+    CDN_USER_AGENT
+  );
 
 
-        /*
-         * Empty line
-         */
-
-        if (
-          !trimmed
-        ) {
-
-          return line;
-
-        }
+  headers.set(
+    "Accept",
+    "*/*"
+  );
 
 
-        /*
-         * HLS tags containing URI
-         *
-         * Example:
-         *
-         * #EXT-X-KEY:URI="..."
-         *
-         * #EXT-X-MAP:URI="..."
-         */
-
-        if (
-          trimmed.startsWith(
-            "#"
-          )
-        ) {
-
-          return line.replace(
-
-            /URI="([^"]+)"/g,
-
-            function(
-              match,
-              uri
-            ) {
-
-              return (
-                'URI="' +
-                convertToProxyURL(
-                  uri,
-                  currentURL
-                ) +
-                '"'
-              );
-
-            }
-
-          );
-
-        }
+  headers.set(
+    "Accept-Encoding",
+    "identity"
+  );
 
 
-        /*
-         * Normal segment / playlist URL
-         */
+  if (
+    CHANNEL.cookie &&
+    CHANNEL.cookie !==
+      "PASTE_YOUR_EDGE_CACHE_COOKIE_HERE"
+  ) {
 
-        return convertToProxyURL(
+    headers.set(
+      "Cookie",
+      CHANNEL.cookie
+    );
 
-          trimmed,
-
-          currentURL
-
-        );
-
-      }
-
-    )
-
-    .join("\n");
-
-}
+  }
 
 
-/* ============================================================
-   CONVERT CDN URL TO WORKER URL
-   ============================================================ */
-
-function convertToProxyURL(
-
-  resource,
-
-  currentURL
-
-) {
+  const started =
+    Date.now();
 
 
   try {
 
+    const response =
+      await fetch(
 
-    const absoluteURL =
-      new URL(
+        CHANNEL.link,
 
-        resource,
+        {
 
-        currentURL
+          method:
+            "GET",
+
+          headers,
+
+          redirect:
+            "follow"
+
+        }
 
       );
 
 
-    /*
-     * Only rewrite our CDN.
-     */
-
-    if (
-      absoluteURL.hostname !==
-      CDN_HOST
-    ) {
-
-      return resource;
-
-    }
+    const text =
+      await response.text();
 
 
-    return (
+    return json({
 
-      "/proxy" +
+      ok: true,
 
-      absoluteURL.pathname +
+      status:
+        response.status,
 
-      absoluteURL.search
+      statusText:
+        response.statusText,
+
+      contentType:
+        response.headers.get(
+          "Content-Type"
+        ),
+
+      contentLength:
+        response.headers.get(
+          "Content-Length"
+        ),
+
+      responseTime:
+        Date.now() -
+        started,
+
+      validM3U8:
+        text.includes(
+          "#EXTM3U"
+        ),
+
+      bodyLength:
+        text.length,
+
+      preview:
+        text.substring(
+          0,
+          500
+        )
+
+    });
+
+  }
+
+  catch (error) {
+
+    return json(
+
+      {
+
+        ok: false,
+
+        error:
+          "UPSTREAM_DEBUG_FAILED",
+
+        message:
+          String(error),
+
+        responseTime:
+          Date.now() -
+          started
+
+      },
+
+      502
 
     );
 
-
   }
 
-  catch (
-    error
-  ) {
-
-    return resource;
-
-  }
-
-}
-
-
-/* ============================================================
-   CORS
-   ============================================================ */
-
-function corsHeaders() {
-
-  return {
-
-    "Access-Control-Allow-Origin":
-      "*",
-
-    "Access-Control-Allow-Methods":
-      "GET, HEAD, OPTIONS",
-
-    "Access-Control-Allow-Headers":
-      "*",
-
-    "Access-Control-Expose-Headers":
-      "*"
-
-  };
-
-}
-
-
-function addCors(
-  headers
-) {
-
-  headers.set(
-
-    "Access-Control-Allow-Origin",
-
-    "*"
-
-  );
-
-
-  headers.set(
-
-    "Access-Control-Allow-Methods",
-
-    "GET, HEAD, OPTIONS"
-
-  );
-
-
-  headers.set(
-
-    "Access-Control-Allow-Headers",
-
-    "*"
-
-  );
-
-
-  headers.set(
-
-    "Access-Control-Expose-Headers",
-
-    "*"
-
-  );
-
-}
-
-
-/* ============================================================
-   JSON RESPONSE
-   ============================================================ */
-
-function json(
-
-  data,
-
-  status = 200
-
-) {
-
-
-  return new Response(
-
-    JSON.stringify(
-      data,
-      null,
-      2
-    ),
-
-    {
-
-      status,
-
-      headers: {
-
-        "Content-Type":
-          "application/json",
-
-        ...corsHeaders()
-
-      }
-
-    }
-
-  );
-
-    }
+   }
