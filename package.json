@@ -1,0 +1,15 @@
+{
+  "name": "jamuna-tv-proxy",
+  "version": "1.0.0",
+  "description": "Reverse proxy for Jamuna TV streaming",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "keywords": ["hls", "proxy", "streaming", "cloudflare-workers"],
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
